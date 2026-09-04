@@ -14,6 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: paso 0 (sonda de MapKit) hecho |
 
 ---
 
@@ -388,6 +389,74 @@ desproporcionada para lo que aporta ahora mismo.
 **Fase 4, parcial.** CRUD de lugares y trayectos guardados, estrella de favorito unificada,
 orden de pestañas y refresco en segundo plano — hechos y verificados. Widget de WidgetKit,
 atajos de Siri y accesibilidad exhaustiva quedan fuera por decisión del propietario.
+
+## Fase 5 — El mapa como planificador
+
+Plan detallado en `~/.claude/plans/quiero-que-me-ayudes-mapful-astrolabe.md`. Alcance: el mapa
+pasa a ser la pantalla del producto — seleccionar cualquier sitio (parada, POI de Apple,
+dirección, punto suelto) y planificar sin salir de ahí, con hoja por detentes; y las paradas
+dejan de dibujarse por defecto, pasando a ser una capa conmutable. La pestaña "Planificar"
+sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos del plan.
+
+### Hecho
+
+- [x] **0/11 — Sonda de MapKit en dispositivo real** (`5c5ce4c`, revertida en el commit
+  siguiente).
+  `App/ILoveVigoRoutes/Views/Map/MapSpikeView.swift` + un botón solo en DEBUG en la barra del
+  mapa. Código desechable por diseño: existe únicamente para contestar en un iPhone las cuatro
+  preguntas que la interfaz del SDK no puede responder, y se borra al cerrar el paso. Queda en
+  el historial por si hiciera falta rescatarla.
+  **Sin simulador en ningún momento** — decisión del propietario: compilación contra
+  `generic/platform=iOS` con `CODE_SIGNING_ALLOWED=NO` como único oráculo local, y la conducta
+  verificada a mano en un iPhone con iOS 26.6.1.
+
+  **Contestado por compilación** (Debug y Release, sin avisos):
+  `Map(position:selection:)` con `Binding<MapSelection<StopID>?>` compila, y la etiqueta
+  correcta del marcador es `.tag(MapSelection(stop.id))`, no `.tag(stop.id)`.
+  `.mapFeatureSelectionAccessory(_:)` acepta un ternario a `nil`. `MapProxy.convert(_:from:)`
+  dentro de `MapReader` da la coordenada de un punto de pantalla. Release compila **sin** la
+  sonda, así que el `#if DEBUG` no deja referencias colgando.
+
+  **Contestado en el iPhone:**
+  - **P1 — selección mixta: SÍ.** La misma binding devuelve `.value` al tocar un `Marker`
+    propio (paradas 3067 y 3027) y `.feature` al tocar un POI de Apple (Castelo do Castro,
+    `MKPOICategoryCastle`; El Corte Inglés, `MKPOICategoryStore`). Esto es lo que sostiene la
+    exigencia nº 1 del propietario, y era el riesgo R1 del plan: **cerrado**.
+  - **P2 — `mapFeatureSelectionAccessory(nil)` apaga la tarjeta nativa: SÍ.** Los dos POIs se
+    seleccionaron con el conmutador en OFF sin que Apple pintara su propia tarjeta.
+  - **P3 — pulsación larga: SÍ, la receta A funciona.** `simultaneousGesture` de
+    `DragGesture(minimumDistance: 0)` (que solo anota la posición del dedo) más
+    `LongPressGesture(minimumDuration: 0.45)` da coordenadas correctas sin robarle el paneo al
+    mapa. La receta B (retícula central) se probó como control y también funciona, pero **no
+    hace falta**: el plan B queda descartado.
+  - **P4 — mapa manipulable con la hoja arriba: SÍ.**
+
+  **Dos hallazgos que NO coinciden con lo que el paso esperaba.** Se anotan porque los dos
+  cambian código futuro:
+
+  1. **Deseleccionar no pone la binding a `nil`.** Tras seleccionar El Corte Inglés y tocar
+     mapa vacío, saltó la rama que la sonda llevaba puesta como detector de anomalías:
+     *selección no vacía pero sin `.value` ni `.feature`*. La explicación está en la propia
+     interfaz del SDK: `MapSelection` tiene `init(_ feature: MapFeature?)`, que **acepta
+     `nil`**, así que al deseleccionar MapKit escribe un `MapSelection` vacío en vez de un
+     `nil`. Consecuencia directa para el paso 4: tratar `selection != nil` como "hay algo
+     seleccionado" dejaría la hoja abierta para siempre después de deseleccionar. La condición
+     correcta es `selection?.value != nil || selection?.feature != nil`. Sin la sonda, este
+     bug se habría descubierto con la hoja ya escrita.
+  2. **El mapa seguía manipulable en el detente `.large`**, con
+     `presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.45)))`, que debería
+     haberlo bloqueado a partir de medio. La pregunta que de verdad importaba —¿se puede
+     mover el mapa con la hoja en el detente pequeño?— no se anotó por separado, pero queda
+     contestada por implicación: `upThrough` es monótono, así que si la interacción está viva
+     por encima del umbral, lo está también por debajo. El diseño no cambia y el efecto es
+     benigno (en `.large` la hoja tapa casi todo el mapa de todas formas), pero el modificador
+     **no se puede usar como si bloqueara nada**: si algún día hace falta bloquear de verdad,
+     habrá que medirlo otra vez en iOS 26.
+
+  **Detalle menor para el paso 4:** `MapFeature.pointOfInterestCategory` devuelve el valor
+  crudo (`MKPOICategoryStore`). Como subtítulo hay que traducirlo, no pintarlo tal cual.
+
+  La sonda y su botón de DEBUG se eliminan en el commit que cierra este paso.
 
 ## Verificación rápida del estado
 
