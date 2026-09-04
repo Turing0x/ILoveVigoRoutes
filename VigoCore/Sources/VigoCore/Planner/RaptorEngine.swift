@@ -193,8 +193,18 @@ public struct RaptorEngine: Sendable {
             // Not iterated to a fixed point on purpose: straight-line footpaths obey the
             // triangle inequality, so chaining them can never beat the direct walk, and
             // capping it at one hop keeps a transfer from silently becoming a 900 m hike.
+            //
+            // The ride arrivals are snapshotted before this loop writes anything: a walk
+            // into stop X can land before X's own turn as a source comes up (X is in
+            // `riddenStops` too, just later in the list), and reading `arrival[base + X]`
+            // live at that point would pick up the walk's result instead of the ride's —
+            // turning "one hop" into two chained ones without either loop noticing.
+            var rideArrival: [Int: Int32] = [:]
+            rideArrival.reserveCapacity(riddenStops.count)
+            for stop in riddenStops { rideArrival[stop] = arrival[base + stop] }
+
             for stop in riddenStops {
-                let from = arrival[base + stop]
+                let from = rideArrival[stop]!
                 for slot in timetable.footpaths(fromStop: stop) {
                     let target = Int(timetable.footpathTarget[slot])
                     let seconds = timetable.footpathSeconds[slot]

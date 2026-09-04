@@ -62,13 +62,30 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   fallan. Ver commit `e017e57` para el detalle — es la evidencia de que "tests en verde"
   no bastaba por sí solo.
 
+- [x] **4/11 — `BruteForceReference` + contraste aleatorizado**
+  `VigoCore/Tests/VigoCoreTests/BruteForceReference.swift`,
+  `VigoCore/Tests/VigoCoreTests/BruteForceReferenceTests.swift`.
+  Referencia exhaustiva (sin búsqueda binaria, sin cola de posiciones, cada patrón
+  reescaneado entero cada ronda) contra timetables sintéticos aleatorios construidos
+  directamente sobre los arrays de `Timetable` (sin pasar por GTFS), 200 instancias con
+  semilla fija (`SeededGenerator`, splitmix64).
+  **Encontró un bug real en `RaptorEngine`, no solo en la referencia**: el paso 4 de
+  relajación de footpaths (`RaptorEngine.swift`) leía `arrival[base + stop]` en vivo como
+  origen de cada caminata. Si una parada `X` alcanzada en bici/bus en esta ronda recibía
+  además una caminata entrante *antes* de que le tocara su turno como origen (`X` está en
+  `riddenStops`, solo que más adelante en la lista), esa lectura recogía el valor ya
+  corregido por la caminata entrante en vez del de la subida — encadenando dos caminatas en
+  una ronda sin que ninguno de los dos bucles lo notara, justo lo que el diseño prohíbe
+  explícitamente («un solo salto a pie por ronda») y lo que el test
+  `oneWalkPerRound` no cazaba porque solo mira el `parent` final, no los valores
+  intermedios usados para calcularlo. Arreglado tomando una foto (`rideArrival: [Int:
+  Int32]`) de las llegadas en bus antes de que el bucle de caminatas escriba nada; la
+  referencia tenía el mismo fallo y se corrigió igual. Sin el contraste aleatorizado este
+  bug no tenía ningún test que lo detectara — los 14+4 tests de ejemplo del paso 3 pasaban
+  igual de verdes con o sin él.
+
 ### Pendiente (orden del plan)
 
-- [ ] **4/11 — `BruteForceReference` + contraste aleatorizado.** El plan lo marca como
-      "aquí es donde se gana la confianza": exploración exhaustiva sobre timetables
-      pequeños, ~200 instancias con semilla fija. Es la red de seguridad real contra
-      respuestas plausibles-pero-subóptimas — justo el tipo de fallo que el paso 3 mostró
-      que los tests de ejemplo no cazan solos.
 - [ ] 5/11 — Reconstrucción de viajes + pasada de ajuste hacia atrás + selección de
       alternativas.
 - [ ] 6/11 — `TimetableStore` (actor con caché) + `JourneyPlanner` (fachada pública) +
@@ -112,5 +129,5 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
 cd VigoCore && swift test 2>&1 | tail -3
 git log --oneline -5
 ```
-Al escribir este documento: 144 tests, 15 suites, todo verde; árbol de trabajo limpio;
-`main` sincronizado con `origin/main` en `e017e57`.
+Al escribir este documento: 145 tests, 16 suites, todo verde; árbol de trabajo limpio antes
+del commit del paso 4/11.
