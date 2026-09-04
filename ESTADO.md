@@ -133,9 +133,23 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   El nombre `JourneyPlannerTests.swift` que el paso 5 dejó pendiente para "cuando exista de
   verdad la fachada" ya está en uso, tal como el plan lo preveía.
 
-### Pendiente (orden del plan)
+- [x] **7/11 — Integración con el feed real + asserción de <1s**
+  `VigoCore/Tests/VigoCoreTests/RealFeedIntegrationTests.swift` (ampliado).
+  Nuevo test `realJourneyPlan`: Praza de América → Urzaiz (~1,3 km, centro de Vigo) con
+  `JourneyPlanner` contra el archivo real, aceptando `.journeys`, `.walkOnly` o
+  `.noServiceOnDay` (un hueco real de calendario no es un defecto) y fallando para
+  cualquier otro caso. `RealFeedTimingTests.importTimings` añade la única asserción dura de
+  la fase: `planElapsed < 1.0` sobre una construcción de `Timetable` **en frío** (el caso
+  peor: nunca se había construido para ese día) más `RaptorEngine` más reconstrucción —
+  medido: **40 ms** contra el feed real (1154 paradas, 3801 viajes, 137456 stopTimes),
+  25× de margen sobre el presupuesto de 1s del handoff.
+  **Detalle no obvio:** la consulta usa el día del propio `feed.serviceWindow`, no "hoy" —
+  el archivo descargado es una foto fija y su ventana de 7 días no siempre incluye la fecha
+  real en la que corre el test (el archivo usado aquí, descargado el 2026-09-04, reporta
+  ventana 20260905–20260911, es decir *empieza mañana*). Usar `Date()` directamente habría
+  dado `.outsideFeedWindow` de forma intermitente según cuándo se ejecute la suite.
 
-- [ ] 7/11 — Integración con el feed real + asserción de <1s en `RealFeedTimingTests`.
+### Pendiente (orden del plan)
 - [ ] 8/11 — App: cirugía de `RootView`, mover "Fuentes" a la barra de Favoritas,
       `AppEnvironment` gana el planificador y precalienta el timetable.
 - [ ] 9/11 — `PlannerView` + `PlacePickerView`.
@@ -174,5 +188,6 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
 cd VigoCore && swift test 2>&1 | tail -3
 git log --oneline -5
 ```
-Al escribir este documento: 162 tests, 19 suites, todo verde; árbol de trabajo limpio antes
-del commit del paso 6/11.
+Al escribir este documento: 163 tests, 19 suites, todo verde en local (sin feed real) y
+también contra el feed real en `-c release` (`VIGO_GTFS_ZIP=/tmp/gtfs_vigo.zip`); árbol de
+trabajo limpio antes del commit del paso 7/11.

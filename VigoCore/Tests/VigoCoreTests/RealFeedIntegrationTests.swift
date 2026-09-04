@@ -102,6 +102,50 @@ struct RealFeedIntegrationTests {
         #expect(nearby.allSatisfy { $0.distanceMetres <= 500 })
     }
 
+    /// The acceptance criterion itself (`ILoveVigoRoutes-HANDOFF.md:192-194`): a known
+    /// trip across the city returns a plausible route. Shape-based like the rest of this
+    /// suite — the exact alternative depends on this week's timetable — but every outcome
+    /// other than "the pipeline actually answered" is a real failure: a coordinate in the
+    /// middle of Vigo with no stop nearby, or the feed's own rolling window not covering
+    /// today, means something upstream of the planner broke.
+    @Test("A journey across the city returns a plausible route")
+    func realJourneyPlan() async throws {
+        let result = try parsed()
+        let db = try AppDatabase.inMemory()
+        _ = try GTFSImporter(database: db).import(feed: result.feed, parseWarnings: result.warnings)
+        let repository = TransitRepository(database: db)
+        let planner = JourneyPlanner(repository: repository, store: TimetableStore(repository: repository))
+
+        // Praza de América to Urzaiz, ~1.3 km across central Vigo — plainly within a
+        // single city's bus network, at a mid-morning hour any operating day runs buses.
+        // The query day comes from the feed's own window rather than "today": the seven
+        // days it reports do not always straddle the calendar date the test happens to run
+        // on (the archive is a point-in-time download), and the window itself is already
+        // covered separately by `serviceWindow()` above.
+        let window = try #require(try repository.feedStatus().window)
+        var components = repository.calendar.dateComponents(
+            [.year, .month, .day], from: try #require(window.lowerBound.startOfDay(in: repository.calendar)))
+        components.hour = 9; components.minute = 0
+        let departure = try #require(repository.calendar.date(from: components))
+
+        let plan = try await planner.plan(PlanQuery(
+            origin: .coordinate(Coordinate(latitude: 42.2209, longitude: -8.7328), label: "Praza de América"),
+            destination: .coordinate(Coordinate(latitude: 42.2339, longitude: -8.7228), label: "Urzaiz"),
+            departure: departure))
+
+        switch plan.outcome {
+        case .journeys(let journeys):
+            #expect(!journeys.isEmpty)
+            #expect(journeys.allSatisfy { $0.arrival > $0.departure })
+        case .walkOnly(let journey):
+            #expect(journey.arrival > journey.departure)
+        case .noServiceOnDay:
+            break // a real calendar gap (e.g. a holiday), not a defect
+        default:
+            Issue.record("unexpected outcome for a real, central, mid-morning journey: \(plan.outcome)")
+        }
+    }
+
     /// Search has to stay under 100 ms. Measured over the real 1149-stop table.
     @Test("Name search stays well under the 100 ms budget")
     func searchPerformance() throws {
@@ -142,7 +186,7 @@ struct RealFeedIntegrationTests {
 struct RealFeedTimingTests {
 
     @Test("Measures the whole import pipeline")
-    func importTimings() throws {
+    func importTimings() async throws {
         let path = try #require(ProcessInfo.processInfo.environment["VIGO_GTFS_ZIP"])
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
 
@@ -199,5 +243,30 @@ struct RealFeedTimingTests {
 
         // The brief's only hard timing budget for Fase 1.
         #expect(perSearch < 0.100, "search must stay under 100 ms")
+
+        // The brief's hard timing budget for Fase 3 (`ILoveVigoRoutes-HANDOFF.md:192-194`):
+        // the planner must respond in under a second. Measured cold — the Timetable has
+        // never been built for this day, so this is the worst case a real query ever hits;
+        // a warm `TimetableStore` hit is JourneyReconstruction plus RaptorEngine alone,
+        // already covered at millisecond scale by the synthetic-network tests.
+        let planner = JourneyPlanner(repository: repository, store: TimetableStore(repository: repository))
+        // Query day from the feed's own window, not "today" — see the note in
+        // `realJourneyPlan` for why the two do not always coincide.
+        let window = try #require(try repository.feedStatus().window)
+        var components = repository.calendar.dateComponents(
+            [.year, .month, .day], from: try #require(window.lowerBound.startOfDay(in: repository.calendar)))
+        components.hour = 9; components.minute = 0
+        let departure = try #require(repository.calendar.date(from: components))
+
+        let planStart = Date()
+        let plan = try await planner.plan(PlanQuery(
+            origin: .coordinate(Coordinate(latitude: 42.2209, longitude: -8.7328), label: "Praza de América"),
+            destination: .coordinate(Coordinate(latitude: 42.2339, longitude: -8.7228), label: "Urzaiz"),
+            departure: departure))
+        let planElapsed = Date().timeIntervalSince(planStart)
+        print(String(format: "  plan (cold)   %6.1f ms -> %@",
+                     planElapsed * 1000, "\(plan.outcome)".prefix(60).description))
+
+        #expect(planElapsed < 1.0, "journey planning must stay under 1 s, cold Timetable build included")
     }
 }
