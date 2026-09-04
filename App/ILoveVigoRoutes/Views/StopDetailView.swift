@@ -270,7 +270,7 @@ struct ArrivalRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("""
             Línea \(arrival.rawLine) a \(arrival.destination), \
-            \(arrival.minutes) minutos, \(kind.label)
+            \(WaitTime(minutes: arrival.minutes).spoken), \(kind.label)
             """))
     }
 }
@@ -279,13 +279,17 @@ struct MinutesLabel: View {
     let minutes: Int
     var tint: Color = .primary
 
+    private var wait: WaitTime { WaitTime(minutes: minutes) }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
-            Text(minutes <= 0 ? "ya" : "\(minutes)")
+            Text(wait.badgeValue)
                 .font(.title3.weight(.semibold).monospacedDigit())
                 .foregroundStyle(tint)
-            if minutes > 0 {
-                Text("min").font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            if let unit = wait.badgeUnit {
+                Text(unit).font(.caption2).foregroundStyle(.secondary)
             }
         }
         .frame(minWidth: 40)

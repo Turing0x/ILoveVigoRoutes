@@ -196,12 +196,12 @@ struct CompactArrivalRow: View {
             Text(arrival.destination).font(.caption).lineLimit(1).foregroundStyle(.secondary)
             Spacer(minLength: 2)
             DataKindBadge(kind: kind, compact: true)
-            Text(arrival.minutes <= 0 ? "ya" : "\(arrival.minutes)′")
+            Text(WaitTime(minutes: arrival.minutes).compactText)
                 .font(.subheadline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(kind.tint)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("Línea \(arrival.rawLine), \(arrival.minutes) minutos, \(kind.label)"))
+        .accessibilityLabel(Text("Línea \(arrival.rawLine), \(WaitTime(minutes: arrival.minutes).spoken), \(kind.label)"))
     }
 }
 

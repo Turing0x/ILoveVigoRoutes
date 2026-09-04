@@ -60,9 +60,59 @@ enum DataKind {
 
     static func ageText(_ age: TimeInterval) -> String {
         let minutes = Int(age / 60)
-        if minutes < 1 { return "menos de 1 min" }
-        if minutes < 60 { return "\(minutes) min" }
-        return "\(minutes / 60) h \(minutes % 60) min"
+        guard minutes >= 1 else { return "menos de 1 min" }
+        return WaitTime(minutes: minutes).inlineText
+    }
+}
+
+/// A wait time in minutes, split into hours once it passes 60.
+///
+/// The realtime source has returned waits of up to ~176 minutes for buses not
+/// yet in service (see `DATA-SOURCES.md` §3.7); showing that as a bare
+/// three-digit minute count is unreadable at a glance.
+struct WaitTime {
+    let minutes: Int
+
+    private var hours: Int { minutes / 60 }
+    private var remainder: Int { minutes % 60 }
+    private var isOverAnHour: Bool { minutes >= 60 }
+
+    /// The big number for a stacked value/unit badge: "9", "2 h 21", "2 h", "ya".
+    var badgeValue: String {
+        guard minutes > 0 else { return "ya" }
+        guard isOverAnHour else { return "\(minutes)" }
+        return remainder == 0 ? "\(hours) h" : "\(hours) h \(remainder)"
+    }
+
+    /// The caption under `badgeValue`, or nil when the value already speaks for
+    /// itself ("ya", or an exact hour like "2 h").
+    var badgeUnit: String? {
+        guard minutes > 0 else { return nil }
+        guard isOverAnHour else { return "min" }
+        return remainder == 0 ? nil : "min"
+    }
+
+    /// Single-line form with the prime mark already used in the favourites card:
+    /// "9′", "2 h 21′", "2 h".
+    var compactText: String {
+        guard minutes > 0 else { return "ya" }
+        guard isOverAnHour else { return "\(minutes)′" }
+        return remainder == 0 ? "\(hours) h" : "\(hours) h \(remainder)′"
+    }
+
+    /// A single spelled-out string: "9 min", "2 h 21 min", "2 h".
+    var inlineText: String {
+        guard isOverAnHour else { return "\(minutes) min" }
+        return remainder == 0 ? "\(hours) h" : "\(hours) h \(remainder) min"
+    }
+
+    /// Phrased for VoiceOver: "9 minutos", "2 horas y 21 minutos".
+    var spoken: String {
+        guard isOverAnHour else { return minutes == 1 ? "1 minuto" : "\(minutes) minutos" }
+        let hoursText = hours == 1 ? "1 hora" : "\(hours) horas"
+        guard remainder > 0 else { return hoursText }
+        let remainderText = remainder == 1 ? "1 minuto" : "\(remainder) minutos"
+        return "\(hoursText) y \(remainderText)"
     }
 }
 
