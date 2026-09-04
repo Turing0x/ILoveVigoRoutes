@@ -19,7 +19,7 @@ struct RootView: View {
             }
             Tab("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond",
                 value: AppTab.planner) {
-                NavigationStack { PlannerPlaceholderView() }
+                PlannerView()
             }
             Tab("Buscar", systemImage: "magnifyingglass", value: AppTab.search) {
                 SearchView()
@@ -68,18 +68,5 @@ struct FirstImportOverlay: View {
         case .writing: "Guardando…"
         case .done, .none: "Preparando…"
         }
-    }
-}
-
-/// Stands in for the real `PlannerView` until it exists — this step is only the tab's
-/// wiring, not its screen.
-struct PlannerPlaceholderView: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond")
-        } description: {
-            Text("La pantalla de planificación de rutas llega en el próximo paso.")
-        }
-        .navigationTitle("Planificar")
     }
 }

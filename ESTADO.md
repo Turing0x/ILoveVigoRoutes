@@ -173,7 +173,25 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   feed real descargado hoy es 05/09–11/09, es decir, no cubre "hoy" (04/09).
 
 ### Pendiente (orden del plan)
-- [ ] 9/11 — `PlannerView` + `PlacePickerView`.
+- [x] **9/11 — `PlannerView` + `PlacePickerView`**
+  `App/ILoveVigoRoutes/Views/PlannerView.swift`, `PlacePickerView.swift`,
+  `MapPointPickerView.swift`, `JourneyRows.swift`.
+  `PlannerModel` sigue el patrón de `StopDetailModel`: origen/destino como `Place?`,
+  intercambio, modo de salida (ahora / a una hora), y `plan()` llamando a
+  `environment.planner.plan(_:)`. `PlacePickerView` cubre las cuatro formas de elegir sitio
+  que pide el handoff — mi ubicación, favorita, resultado de `searchStops` (sin debounce,
+  igual que `SearchView`), y "elegir en el mapa" vía `MapPointPickerView` (mismo patrón de
+  `Map`/`MapCameraPosition` que ya usa `StopsMapView`, pin fijo en el centro en vez de
+  anotación arrastrable). `JourneyRows.swift` trae `JourneyAlternativeRow` (resumen: hora,
+  hora, duración, chips por tramo) y `JourneyLegRow` (tramo expandido, para cuando exista
+  `JourneyDetailView` en el paso 10), reutilizando `LineBadge`/`WaitTime` de
+  `DataProvenanceViews.swift`.
+  Verificado en el simulador (iPhone 17 Pro) contra el feed real completo: Praza de
+  América → Rúa de Urzáiz un día dentro de la ventana (05/09) encuentra la ruta real
+  (línea 29, directo, 14 min, con los tramos a pie de entrada y salida correctos); el mismo
+  origen/destino "ahora" (04/09, fuera de ventana) devuelve el mensaje de
+  `outsideFeedWindow` correcto. Confirma en el simulador, con interacción real, lo que los
+  pasos 6 y 7 ya habían probado por código.
 - [ ] 10/11 — `JourneyDetailView` con trazado real desde `shapePoint`.
 - [ ] 11/11 — Anotación con tiempo real del primer embarque + actualizar tabla de estado
       de `README.md`.
@@ -211,4 +229,4 @@ git log --oneline -5
 ```
 Al escribir este documento: 163 tests de `VigoCore` en verde (paquete Swift; la app en
 `App/` se compila y verifica aparte con `xcodebuild`/el simulador); árbol de trabajo
-limpio antes del commit del paso 8/11.
+limpio antes del commit del paso 9/11.
