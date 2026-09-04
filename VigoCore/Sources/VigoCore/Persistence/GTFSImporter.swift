@@ -49,10 +49,14 @@ public struct GTFSImporter: Sendable {
 
     /// - Parameter provenance: HTTP validators for the ZIP this feed came from, stored so
     ///   the next refresh can ask the server "has this changed?" instead of re-downloading.
+    /// - Parameter importedAt: The instant recorded as the age of this data. Injectable so
+    ///   it agrees with the clock the caller is already using — `GTFSFeedService` stamps
+    ///   the check time and the import time from the same `now`, and tests can pin both.
     public func `import`(
         feed: GTFSFeed,
         parseWarnings: [GTFSParseWarning] = [],
         provenance: FeedProvenance? = nil,
+        importedAt: Date = Date(),
         progress: (@Sendable (ImportProgress) -> Void)? = nil
     ) throws -> ImportSummary {
         let started = Date()
@@ -117,7 +121,7 @@ public struct GTFSImporter: Sendable {
                 }
                 try MetadataRow(key: key, value: value).upsert(db)
             }
-            try put(FeedMetadataKey.importedAt, ISO8601DateFormatter().string(from: Date()))
+            try put(FeedMetadataKey.importedAt, ISO8601DateFormatter().string(from: importedAt))
             try put(FeedMetadataKey.etag, provenance?.etag)
             try put(FeedMetadataKey.lastModified, provenance?.lastModified)
             try put(FeedMetadataKey.sourceURL, provenance?.sourceURL?.absoluteString)

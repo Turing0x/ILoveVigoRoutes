@@ -70,7 +70,8 @@ struct FeedServiceTests {
             feed: parsed.feed,
             provenance: FeedProvenance(etag: "\"abc123\"",
                                        lastModified: "Mon, 31 Aug 2026 04:31:47 GMT",
-                                       sourceURL: nil))
+                                       sourceURL: nil),
+            importedAt: Fixture.importedAt)
 
         let downloader = StubDownloader(responses: [nil])   // 304
         let service = GTFSFeedService(downloader: downloader, database: db,
@@ -92,13 +93,13 @@ struct FeedServiceTests {
     func checkTimeIsSeparate() async throws {
         let db = try Fixture.importedDatabase()
         let repository = TransitRepository(database: db)
-        let importedAt = try repository.feedStatus().importedAt
         let service = GTFSFeedService(downloader: StubDownloader(responses: [nil]),
                                       database: db, repository: repository, checkInterval: 0)
         _ = try await service.refreshIfNeeded(now: Fixture.date(2026, 9, 4, 9, 0))
 
         let status = try repository.feedStatus()
-        #expect(status.importedAt == importedAt, "the data did not change, so neither should its date")
+        #expect(status.importedAt == Fixture.importedAt,
+                "the data did not change, so neither should its date")
         #expect(status.lastCheckedAt == Fixture.date(2026, 9, 4, 9, 0))
     }
 

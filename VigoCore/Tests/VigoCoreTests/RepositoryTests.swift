@@ -177,9 +177,11 @@ struct RepositoryTests {
         _ = try GTFSImporter(database: db).import(
             feed: parsed.feed,
             provenance: FeedProvenance(etag: "\"abc\"", lastModified: "Mon, 31 Aug 2026 04:31:47 GMT",
-                                       sourceURL: URL(string: "https://datos.vigo.org/data/transporte/gtfs_vigo.zip")))
+                                       sourceURL: URL(string: "https://datos.vigo.org/data/transporte/gtfs_vigo.zip")),
+            importedAt: Fixture.importedAt)
         let status = try TransitRepository(database: db).feedStatus()
         #expect(status.hasData)
+        #expect(status.importedAt == Fixture.importedAt, "the import stamps the clock it was given")
         #expect(status.etag == "\"abc\"")
         #expect(status.covers(ServiceDate(yyyymmdd: 20_260_904)))
         #expect(!status.covers(ServiceDate(yyyymmdd: 20_260_910)))

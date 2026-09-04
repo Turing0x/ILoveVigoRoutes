@@ -150,6 +150,7 @@ public struct GTFSFeedService: Sendable {
             feed: parsed.feed,
             parseWarnings: parsed.warnings,
             provenance: downloaded.provenance,
+            importedAt: now,
             progress: progress)
         return .imported(summary)
     }

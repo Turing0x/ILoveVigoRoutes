@@ -80,10 +80,18 @@ enum Fixture {
         try GTFSParser().parse(from: provider).feed
     }
 
+    /// The instant the fixture feed is stamped as having been imported.
+    ///
+    /// Pinned rather than left as "now": the refresh policy compares the fake `now` a test
+    /// passes against the stored import date, so a real clock would make those tests pass
+    /// or fail depending on the time of day they were run.
+    static let importedAt = date(2026, 9, 4, 8, 0)
+
     static func importedDatabase() throws -> AppDatabase {
         let db = try AppDatabase.inMemory()
         let result = try GTFSParser().parse(from: provider)
-        _ = try GTFSImporter(database: db).import(feed: result.feed, parseWarnings: result.warnings)
+        _ = try GTFSImporter(database: db).import(
+            feed: result.feed, parseWarnings: result.warnings, importedAt: importedAt)
         return db
     }
 
