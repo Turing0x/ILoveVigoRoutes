@@ -142,11 +142,11 @@ struct TimetableBuilderTests {
     @Test("Counts the whole synthetic network")
     func totals() throws {
         let timetable = try PlannerFixture.networkTimetable()
-        // L1, L2, N1 and the two halves of L4.
-        #expect(timetable.patternCount == 5)
-        // Friday and Saturday run eight trips each; Thursday contributes only the night one.
-        #expect(timetable.tripCount == 17)
-        #expect(timetable.stopCount == 5)
+        // L1, L2, L5, L6, N1 and the two halves of L4.
+        #expect(timetable.patternCount == 7)
+        // Friday and Saturday run twelve trips each; Thursday contributes only the night one.
+        #expect(timetable.tripCount == 25)
+        #expect(timetable.stopCount == 6)
     }
 
     // MARK: - Indexes
@@ -158,10 +158,14 @@ struct TimetableBuilderTests {
         let slots = timetable.patternSlots(ofStop: c).map {
             (Int(timetable.stopPatternPattern[$0]), Int(timetable.stopPatternPosition[$0]))
         }
-        // C is the last stop of L1, N1 and both halves of L4, and is on no other pattern.
-        #expect(slots.count == 4)
-        #expect(slots.allSatisfy { $0.1 == 2 })
-        #expect(Set(slots.map { timetable.patternRouteShortName[$0.0] }) == ["L1", "N1", "L4"])
+        // C is the last stop of L1, N1 and both halves of L4, the first of L5 and the
+        // middle of L6.
+        #expect(slots.count == 6)
+        #expect(slots.filter { $0.1 == 2 }.count == 4)
+        #expect(slots.filter { $0.1 == 0 }.map { timetable.patternRouteShortName[$0.0] } == ["L5"])
+        #expect(slots.filter { $0.1 == 1 }.map { timetable.patternRouteShortName[$0.0] } == ["L6"])
+        #expect(Set(slots.map { timetable.patternRouteShortName[$0.0] })
+                == ["L1", "N1", "L4", "L5", "L6"])
 
         for pattern in 0..<timetable.patternCount {
             for position in 0..<timetable.stopCount(ofPattern: pattern) {
@@ -225,6 +229,6 @@ struct TimetableBuilderTests {
         #expect(timetable.patternCount == 0)
         #expect(timetable.tripCount == 0)
         #expect(timetable.coveredDays.isEmpty)
-        #expect(timetable.stopCount == 5, "the stops still exist, there is just nothing running")
+        #expect(timetable.stopCount == 6, "the stops still exist, there is just nothing running")
     }
 }

@@ -35,16 +35,21 @@ enum PlannerFixture {
     /// ```
     ///   A ──600m── B ──600m── C ──600m── D
     ///                         C2 (40 m north of C)
+    ///                         E  (280 m north of C2, 320 m from C)
     /// ```
-    /// L1 runs A→B→C, L2 runs C2→D, so the only way from A to D is a walking transfer at
-    /// C. N1 runs A→B→C after midnight, and L4 runs A→B→C with a stopper and an express
-    /// that overtakes it.
+    /// E is served by nothing and exists only to make walk-chaining visible: it is inside
+    /// the 300 m transfer radius of C2 but outside C's, so it can only be reached by
+    /// walking twice in a row — which the planner must refuse to do.
+    /// L1 runs A→B→C, L2 runs C2→D and L5 runs C→D, so A→D can be done either with a
+    /// walking transfer at C or with a same-stop one. N1 runs A→B→C after midnight, and
+    /// L4 runs A→B→C with a stopper and an express that overtakes it.
     static let networkStops: [Stop] = [
         stop("1001", name: "A"),
         stop("1002", eastMetres: 600, name: "B"),
         stop("1003", eastMetres: 1_200, name: "C"),
         stop("1004", northMetres: 40, eastMetres: 1_200, name: "C2"),
         stop("1005", eastMetres: 1_800, name: "D"),
+        stop("1006", northMetres: 320, eastMetres: 1_200, name: "E"),
     ]
 
     static func index(of id: String, in timetable: Timetable) -> Int {
@@ -67,6 +72,8 @@ enum PlannerFixture {
     R2,1,L2,C2 - D,3,993300,000000
     R3,1,N1,NOCTURNO A - C,3,336699,000000
     R4,1,L4,A - C EXPRES,3,00A000,000000
+    R5,1,L5,C - D,3,7040A0,000000
+    R6,1,L6,A - D DIRECTO,3,C08000,000000
     R9,1,G9,LIÑA FANTASMA,3,888888,000000
     """
 
@@ -81,10 +88,23 @@ enum PlannerFixture {
     R3,WEEK,TN_2510,C,0,B3,
     R4,WEEK,T4_1000,C,0,B4,
     R4,WEEK,T4_1005,C EXPRES,0,B4,
+    R5,WEEK,T5_0821,D,0,B5,
+    R5,WEEK,T5_0830,D,0,B5,
+    R6,WEEK,T6_0650,D,0,B6,
+    R6,WEEK,T6_0900,D,0,B6,
     """
 
     /// `T4_1005` leaves A five minutes after `T4_1000` and reaches C twenty minutes before
     /// it. `TN_2510` runs at 25:10, i.e. 01:10 the next calendar morning.
+    ///
+    /// `T5_0821` leaves C at 08:21:00, exactly one minute after `T1_0800` gets there: the
+    /// default `minTransferSeconds` makes it catchable and one second more does not.
+    ///
+    /// L6 is the trap for a planner that lets a passenger board with a label from the round
+    /// it is currently in. `T6_0650` leaves A too early to be caught by a 07:00 traveller
+    /// but is still sitting at C at 08:30 — reachable only by getting off L1 there, which
+    /// is a second vehicle and therefore a second round. A planner that boards it during
+    /// round one reports a two-bus journey as a one-bus one.
     private static let networkStopTimes = """
     trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
     T1_0800,08:00:00,08:00:00,1001,1,0,0
@@ -112,6 +132,16 @@ enum PlannerFixture {
     T4_1005,10:05:00,10:05:00,1001,1,0,0
     T4_1005,10:12:00,10:12:00,1002,2,0,0
     T4_1005,10:20:00,10:20:00,1003,3,0,0
+    T5_0821,08:21:00,08:21:00,1003,1,0,0
+    T5_0821,08:31:00,08:31:00,1005,2,0,0
+    T5_0830,08:30:00,08:30:00,1003,1,0,0
+    T5_0830,08:45:00,08:45:00,1005,2,0,0
+    T6_0650,06:50:00,06:50:00,1001,1,0,0
+    T6_0650,08:30:00,08:30:00,1003,2,0,0
+    T6_0650,08:40:00,08:40:00,1005,3,0,0
+    T6_0900,09:00:00,09:00:00,1001,1,0,0
+    T6_0900,09:30:00,09:30:00,1003,2,0,0
+    T6_0900,09:40:00,09:40:00,1005,3,0,0
     """
 
     /// 2026-09-03 is a Thursday and 2026-09-06 a Sunday, so an anchor of 2026-09-04 has a
