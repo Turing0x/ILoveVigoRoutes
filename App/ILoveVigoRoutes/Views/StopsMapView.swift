@@ -50,6 +50,18 @@ struct StopsMapView: View {
             }
             .navigationTitle("Mapa")
             .navigationBarTitleDisplayMode(.inline)
+            #if DEBUG
+            // Entrada a la sonda de la Fase 5, paso 0. Desaparece con `MapSpikeView.swift`
+            // en cuanto las cuatro preguntas estén contestadas. Va aquí y no en una sexta
+            // pestaña porque en iPhone la sexta colapsa "Cercanas" dentro de "Más".
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { MapSpikeView() } label: {
+                        Image(systemName: "testtube.2")
+                    }
+                }
+            }
+            #endif
             .sheet(item: $selected) { stop in
                 NavigationStack {
                     StopDetailView(stop: stop, environment: environment)
