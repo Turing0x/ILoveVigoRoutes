@@ -108,10 +108,33 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   no `JourneyPlannerTests.swift` — ese nombre lo tomará el paso 6, cuando exista de verdad
   la fachada `JourneyPlanner` que el plan describe para ese fichero.
 
+- [x] **6/11 — `TimetableStore` + `JourneyPlanner` + todos los `PlanOutcome`**
+  `VigoCore/Sources/VigoCore/Planner/TimetableStore.swift`, `JourneyPlanner.swift`;
+  tests en `JourneyPlannerTests.swift` (facade), `TimetableStoreTests.swift`.
+  `TimetableStore` es el segundo actor del paquete (junto a `ThrottledRealtimeProvider`),
+  pero más simple: `TimetableBuilder.build` no tiene ningún punto de suspensión dentro, así
+  que la propia serialización del actor ya basta para que dos peticiones concurrentes
+  esperen a una sola construcción — no hace falta el `inFlight`/`Task` que sí necesita
+  `ThrottledRealtimeProvider` (esa sí llama a una red asíncrona real). Caché LRU de 3
+  entradas, clave (día ancla, `feedStatus.importedAt`).
+  `JourneyPlanner.plan` sigue el orden literal del plan: resuelve accesos/salidas por
+  `nearbyStops` con el radio de acceso, comprueba ventana del feed y día de servicio, pide
+  el `Timetable` al store, corre `RaptorEngine`, reconstruye con `JourneyReconstruction`, y
+  decide entre `.journeys`, `.walkOnly` y `.noJourneyFound` comparando la caminata directa
+  contra la mejor alternativa en autobús.
+  **Desviación del plan, justificada:** el plan no dice cuándo `.noJourneyFound` debe
+  ganarle a `.walkOnly` — tal cual estaba escrito ("si caminar es más rápido... walkOnly"),
+  caminar siempre "gana" cuando no hay autobús, y `.noJourneyFound` quedaría inalcanzable
+  pese a ser un caso que el propio plan pide probar. Añadido un límite: la caminata directa
+  solo es una alternativa válida si tarda `<= options.searchHorizon` (el mismo presupuesto
+  que ya usa la búsqueda en autobús); si no, y no hay autobús, es `.noJourneyFound`.
+  Verificado por mutación: anular el recorte por capacidad de `TimetableStore` tumba el
+  test de desalojo con un mismatch de contenido, no solo un contador.
+  El nombre `JourneyPlannerTests.swift` que el paso 5 dejó pendiente para "cuando exista de
+  verdad la fachada" ya está en uso, tal como el plan lo preveía.
+
 ### Pendiente (orden del plan)
 
-- [ ] 6/11 — `TimetableStore` (actor con caché) + `JourneyPlanner` (fachada pública) +
-      todos los `PlanOutcome` de fallo.
 - [ ] 7/11 — Integración con el feed real + asserción de <1s en `RealFeedTimingTests`.
 - [ ] 8/11 — App: cirugía de `RootView`, mover "Fuentes" a la barra de Favoritas,
       `AppEnvironment` gana el planificador y precalienta el timetable.
@@ -151,5 +174,5 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
 cd VigoCore && swift test 2>&1 | tail -3
 git log --oneline -5
 ```
-Al escribir este documento: 151 tests, 17 suites, todo verde; árbol de trabajo limpio antes
-del commit del paso 5/11.
+Al escribir este documento: 162 tests, 19 suites, todo verde; árbol de trabajo limpio antes
+del commit del paso 6/11.
