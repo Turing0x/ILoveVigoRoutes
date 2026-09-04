@@ -3,7 +3,7 @@ import MapKit
 import VigoCore
 
 /// The stretch of a trip's shape that a passenger actually rides, one per ride leg.
-struct JourneyTrace: Identifiable {
+struct JourneyTrace: Identifiable, Sendable {
     let id: Int
     let coordinates: [CLLocationCoordinate2D]
 }

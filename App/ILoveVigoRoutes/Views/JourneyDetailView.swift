@@ -80,13 +80,20 @@ struct JourneyDetailView: View {
         .navigationTitle("Detalle del trayecto")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            load()
+            await load()
             await loadLiveFirstBoarding()
         }
     }
 
-    private func load() {
-        traces = JourneyTraceBuilder.traces(for: journey, repository: environment.repository)
+    private func load() async {
+        // Reading the ridden shape is a SQLite hit per ride leg. `.task` already runs
+        // async, but with no suspension point the work would still land on the main actor
+        // during the push animation — `Task.detached` is what actually moves it off.
+        let repository = environment.repository
+        let built = await Task.detached(priority: .userInitiated) {
+            JourneyTraceBuilder.traces(for: journey, repository: repository)
+        }.value
+        traces = built
         camera = .region(JourneyTraceBuilder.region(for: journey, traces: traces))
     }
 

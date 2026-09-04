@@ -45,7 +45,10 @@ struct JourneyMapView: View {
         .toolbar(.hidden, for: .tabBar)
         .task {
             if traces.isEmpty {
-                traces = JourneyTraceBuilder.traces(for: journey, repository: environment.repository)
+                let repository = environment.repository
+                traces = await Task.detached(priority: .userInitiated) {
+                    JourneyTraceBuilder.traces(for: journey, repository: repository)
+                }.value
             }
             location.requestPermissionIfNeeded()
             // Hundred-metre fixes are fine for "which stops are near me"; following someone

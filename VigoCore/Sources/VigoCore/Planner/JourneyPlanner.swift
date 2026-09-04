@@ -95,8 +95,15 @@ public struct JourneyPlanner: Sendable {
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
             return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres)))
         }
-        let alternatives = scan(timetable: timetable, access: accessWalks,
-                                egress: egressWalks, query: query)
+        // RAPTOR is pure CPU, and `scan` runs it up to `maxDepartureScans` times in a row
+        // with no suspension point in between. `plan` itself is not actor-isolated, so
+        // calling it from `@MainActor` code (the planner screen) would otherwise run every
+        // one of those passes on the main thread — invisible at one pass, a visible stall
+        // once several run back to back. Detaching hands the whole batch to a background
+        // thread; only the tiny result crosses back.
+        let alternatives = try await Task.detached(priority: .userInitiated) {
+            self.scan(timetable: timetable, access: accessWalks, egress: egressWalks, query: query)
+        }.value
 
         // A direct walk has no radius limit of its own, but one that would take longer than
         // the bus search is willing to look is not a "faster than the bus" fallback — it is
