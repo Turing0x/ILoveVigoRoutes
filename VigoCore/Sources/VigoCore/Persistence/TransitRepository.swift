@@ -32,12 +32,28 @@ public struct NearbyStop: Sendable, Hashable, Identifiable {
 /// Everything the app knows about where its static data came from and how long it is
 /// good for. Surfaced in the UI rather than kept in logs.
 public struct FeedStatus: Sendable, Hashable {
+    /// When the data currently in the database was imported.
     public let importedAt: Date?
+    /// When the server was last asked for a newer feed, which may be more recent than
+    /// `importedAt` if the answer was "nothing changed".
+    public let lastCheckedAt: Date?
     public let etag: String?
     public let lastModified: String?
     public let sourceURL: URL?
     public let window: ClosedRange<ServiceDate>?
     public let advisories: [String]
+
+    public init(importedAt: Date?, lastCheckedAt: Date?, etag: String?, lastModified: String?,
+                sourceURL: URL?, window: ClosedRange<ServiceDate>?, advisories: [String]) {
+        self.importedAt = importedAt; self.lastCheckedAt = lastCheckedAt
+        self.etag = etag; self.lastModified = lastModified
+        self.sourceURL = sourceURL; self.window = window; self.advisories = advisories
+    }
+
+    /// Nothing imported yet.
+    public static let empty = FeedStatus(
+        importedAt: nil, lastCheckedAt: nil, etag: nil, lastModified: nil,
+        sourceURL: nil, window: nil, advisories: [])
 
     public var hasData: Bool { importedAt != nil }
 
@@ -87,6 +103,7 @@ public struct TransitRepository: Sendable {
             if let start, let end, start <= end { window = start...end }
             return FeedStatus(
                 importedAt: map[FeedMetadataKey.importedAt].flatMap { ISO8601DateFormatter().date(from: $0) },
+                lastCheckedAt: map[FeedMetadataKey.lastCheckedAt].flatMap { ISO8601DateFormatter().date(from: $0) },
                 etag: map[FeedMetadataKey.etag],
                 lastModified: map[FeedMetadataKey.lastModified],
                 sourceURL: map[FeedMetadataKey.sourceURL].flatMap(URL.init(string:)),

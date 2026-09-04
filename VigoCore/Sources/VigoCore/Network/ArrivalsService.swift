@@ -48,9 +48,7 @@ public struct ArrivalsService: Sendable {
     }
 
     public func arrivals(for stop: Stop, now: Date = Date()) async -> StopArrivals {
-        let feedStatus = (try? repository.feedStatus()) ?? FeedStatus(
-            importedAt: nil, etag: nil, lastModified: nil,
-            sourceURL: nil, window: nil, advisories: [])
+        let feedStatus = (try? repository.feedStatus()) ?? .empty
         let today = ServiceDate(now, calendar: repository.calendar)
         let scheduled = (try? repository.scheduledDepartures(stopID: stop.id, from: now)) ?? []
         let outsideWindow = feedStatus.hasData && !feedStatus.covers(today)

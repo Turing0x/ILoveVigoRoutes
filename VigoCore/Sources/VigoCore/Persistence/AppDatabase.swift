@@ -142,6 +142,8 @@ public enum FeedMetadataKey {
     public static let etag = "gtfs.etag"
     public static let lastModified = "gtfs.lastModified"
     public static let importedAt = "gtfs.importedAt"
+    /// Last time the server was asked, whether or not anything changed.
+    public static let lastCheckedAt = "gtfs.lastCheckedAt"
     public static let windowStart = "gtfs.windowStart"
     public static let windowEnd = "gtfs.windowEnd"
     public static let sourceURL = "gtfs.sourceURL"
