@@ -241,6 +241,12 @@ public struct TransitRepository: Sendable {
         }
     }
 
+    /// The trip's own row — in practice, so `JourneyDetailView` can follow `tripID` to a
+    /// `shapeID` and then to the line's actual geometry, which nothing before it needed.
+    public func trip(id: TripID) throws -> Trip? {
+        try database.writer.read { db in try Trip.fetchOne(db, key: id.rawValue) }
+    }
+
     public func shape(id: ShapeID) throws -> [ShapePoint] {
         try database.writer.read { db in
             try ShapePoint.filter(sql: "shapeID = ?", arguments: [id.rawValue])

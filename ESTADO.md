@@ -192,7 +192,22 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   origen/destino "ahora" (04/09, fuera de ventana) devuelve el mensaje de
   `outsideFeedWindow` correcto. Confirma en el simulador, con interacción real, lo que los
   pasos 6 y 7 ya habían probado por código.
-- [ ] 10/11 — `JourneyDetailView` con trazado real desde `shapePoint`.
+- [x] **10/11 — `JourneyDetailView` con trazado real desde `shapePoint`**
+  `App/ILoveVigoRoutes/Views/JourneyDetailView.swift`;
+  `VigoCore/Sources/VigoCore/Persistence/TransitRepository.swift` gana `trip(id:)`.
+  Primer uso real de `shapePoint`/`TransitRepository.shape(id:)`, importados e indexados
+  desde la Fase 0 pero sin ningún lector hasta ahora. Cada tramo en autobús resuelve
+  `tripID → Trip → shapeID → [ShapePoint]` y recorta el trazado entero de la línea a la
+  parte realmente recorrida: el helper que pedía el plan, por punto más cercano (no por
+  índice de secuencia, porque GTFS no promete un `shapePoint` exacto en cada parada, solo
+  que la parada cae cerca del trazado). `Map` con `MapPolyline` + marcadores de
+  origen/subida/bajada/destino, y debajo la lista de tramos con `JourneyLegRow` (ya escrito
+  en el paso 9). `PlannerView` engancha cada alternativa con un `NavigationLink`.
+  Verificado en el simulador contra el feed real: el tramo en autobús (línea 23,
+  Avda. de Castrelos → Rúa de Pizarro) dibuja el trazado real siguiendo las calles, no una
+  línea recta entre las dos paradas.
+  Añadido de paso: `RepositoryTests.tripLookup` cubre el `trip(id:)` nuevo (encuentra el
+  `shapeID`, y `nil` para un id inexistente).
 - [ ] 11/11 — Anotación con tiempo real del primer embarque + actualizar tabla de estado
       de `README.md`.
 
@@ -227,6 +242,6 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
 cd VigoCore && swift test 2>&1 | tail -3
 git log --oneline -5
 ```
-Al escribir este documento: 163 tests de `VigoCore` en verde (paquete Swift; la app en
+Al escribir este documento: 164 tests de `VigoCore` en verde (paquete Swift; la app en
 `App/` se compila y verifica aparte con `xcodebuild`/el simulador); árbol de trabajo
-limpio antes del commit del paso 9/11.
+limpio antes del commit del paso 10/11.

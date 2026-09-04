@@ -145,6 +145,19 @@ struct RepositoryTests {
         #expect(!names.contains("9B."), "a route with no trips is a ghost line")
     }
 
+    @Test("Finds a trip by id, and its shape through it")
+    func tripLookup() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        let trip = try #require(try repository.trip(id: TripID("T_DAY_1")))
+        #expect(trip.routeID == RouteID("1"))
+        #expect(trip.shapeID == ShapeID("S1"))
+
+        let points = try repository.shape(id: try #require(trip.shapeID))
+        #expect(points.map(\.sequence) == [1, 2])
+
+        #expect(try repository.trip(id: TripID("NO_SUCH_TRIP")) == nil)
+    }
+
     @Test("Lists the lines serving a stop")
     func linesAtStop() throws {
         let repository = TransitRepository(database: try Fixture.importedDatabase())

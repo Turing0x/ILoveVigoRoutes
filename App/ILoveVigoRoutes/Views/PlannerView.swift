@@ -147,13 +147,21 @@ struct PlannerView: View {
         case .journeys(let journeys):
             Section("Alternativas") {
                 ForEach(journeys) { journey in
-                    JourneyAlternativeRow(journey: journey)
+                    NavigationLink {
+                        JourneyDetailView(journey: journey)
+                    } label: {
+                        JourneyAlternativeRow(journey: journey)
+                    }
                 }
             }
 
         case .walkOnly(let journey):
             Section {
-                JourneyAlternativeRow(journey: journey)
+                NavigationLink {
+                    JourneyDetailView(journey: journey)
+                } label: {
+                    JourneyAlternativeRow(journey: journey)
+                }
             } header: {
                 Text("A pie")
             } footer: {
