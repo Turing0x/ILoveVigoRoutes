@@ -27,7 +27,7 @@
         <string>UIInterfaceOrientationPortrait</string>
     </array>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Para mostrar las paradas de autobús más cercanas a ti. La ubicación no sale del dispositivo.</string>
+    <string>Para mostrar las paradas de autobús más cercanas a ti y planificar rutas desde donde estás. La ubicación no sale del dispositivo.</string>
     <!-- The GTFS archive and the realtime endpoints are plain HTTP-free, but the legacy
          InfoBus fallback at infobus.vitrasa.es is HTTP-only. It is not used by the app
          today, so no ATS exception is declared. -->

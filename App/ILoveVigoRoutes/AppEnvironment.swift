@@ -12,6 +12,8 @@ final class AppEnvironment {
     let repository: TransitRepository
     let arrivals: ArrivalsService
     let feedService: GTFSFeedService
+    let planner: JourneyPlanner
+    private let timetableStore: TimetableStore
     private let throttledRealtime: ThrottledRealtimeProvider
 
     /// Progress of the current import, or `nil` when nothing is running.
@@ -38,7 +40,24 @@ final class AppEnvironment {
                                         cache: ArrivalsCache(database: db))
         self.feedService = GTFSFeedService(downloader: VitrasaFeedDownloader(),
                                            database: db, repository: repository)
+        let timetableStore = TimetableStore(repository: repository)
+        self.timetableStore = timetableStore
+        self.planner = JourneyPlanner(repository: repository, store: timetableStore)
         self.feedStatus = (try? repository.feedStatus()) ?? .empty
+
+        prewarmTimetable()
+    }
+
+    /// Builds today's `Timetable` off the main actor right after launch, so the first real
+    /// query — the user's first "Planificar" tap — hits a warm `TimetableStore` instead of
+    /// paying the build cost RealFeedTimingTests measures at ~40 ms against the real feed:
+    /// small, but no reason to spend it while someone is waiting on a tap.
+    private func prewarmTimetable() {
+        let store = timetableStore
+        let anchor = today
+        Task.detached(priority: .utility) {
+            _ = try? await store.timetable(anchor: anchor)
+        }
     }
 
     var hasData: Bool { feedStatus.hasData }

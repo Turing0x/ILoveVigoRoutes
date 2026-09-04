@@ -77,6 +77,7 @@ final class FavouritesModel {
 struct FavouritesView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: FavouritesModel?
+    @State private var showingDataSources = false
 
     var body: some View {
         NavigationStack {
@@ -88,6 +89,23 @@ struct FavouritesView: View {
                 }
             }
             .navigationTitle("Favoritas")
+            // "Fuentes" used to be its own tab; with "Planificar" taking the fifth slot,
+            // attribution moves here instead of falling into iOS's "Más" overflow menu.
+            // Placed at the NavigationStack level, not inside `content(_:)`, so it exists
+            // even with zero favourites — unlike the `EditButton` below, which only makes
+            // sense once there is something to reorder or delete.
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingDataSources = true
+                    } label: {
+                        Label("Fuentes de datos", systemImage: "info.circle")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingDataSources) {
+                NavigationStack { DataSourcesView() }
+            }
         }
         .task {
             if model == nil { model = FavouritesModel(environment: environment) }

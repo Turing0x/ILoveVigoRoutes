@@ -149,9 +149,30 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   ventana 20260905–20260911, es decir *empieza mañana*). Usar `Date()` directamente habría
   dado `.outsideFeedWindow` de forma intermitente según cuándo se ejecute la suite.
 
+- [x] **8/11 — App: cirugía de `RootView`, "Fuentes" a Favoritas, `AppEnvironment`**
+  `App/ILoveVigoRoutes/Views/RootView.swift`, `Views/FavouritesView.swift`,
+  `AppEnvironment.swift`, `Info.plist`.
+  `AppTab` gana `.planner` (quinta posición ocupada, así que `.sources` desaparece);
+  pestaña "Planificar" (`arrow.triangle.turn.up.right.diamond`) en 3ª posición, entre
+  "Cercanas" y "Buscar". "Fuentes" pasa a un botón de información en la barra de
+  navegación de `FavouritesView`, a nivel del `NavigationStack` (no dentro de
+  `content(_:)`), para que exista también con cero favoritas; abre `DataSourcesView` en
+  una hoja en vez de empujarla en la propia `NavigationStack` de Favoritas.
+  `AppEnvironment` gana `let planner: JourneyPlanner` y un `TimetableStore` propio,
+  precalentado en `init` con `Task.detached(priority: .utility)` para el día de hoy — el
+  mismo patrón que ya usa `refreshFeed`. `Info.plist` amplía la descripción de ubicación
+  para mencionar la planificación.
+  **Desviación del plan, señalada por necesidad, no por elección:** el plan reserva
+  `PlannerView.swift` para el paso 9, así que la pestaña "Planificar" de este paso apunta a
+  un `PlannerPlaceholderView` provisional en el propio `RootView.swift` — se sustituye por
+  la vista real en el paso 9.
+  Verificado en el simulador (iPhone 17 Pro): las 5 pestañas se ven correctas
+  (Favoritas/Cercanas/Planificar/Buscar/Mapa, sin "Fuentes"), el botón de información abre
+  la hoja de "Fuentes de datos" con el `feedStatus` real, y la pestaña "Planificar" muestra
+  el placeholder. De paso, confirma en vivo lo que el paso 7 ya había medido: la ventana del
+  feed real descargado hoy es 05/09–11/09, es decir, no cubre "hoy" (04/09).
+
 ### Pendiente (orden del plan)
-- [ ] 8/11 — App: cirugía de `RootView`, mover "Fuentes" a la barra de Favoritas,
-      `AppEnvironment` gana el planificador y precalienta el timetable.
 - [ ] 9/11 — `PlannerView` + `PlacePickerView`.
 - [ ] 10/11 — `JourneyDetailView` con trazado real desde `shapePoint`.
 - [ ] 11/11 — Anotación con tiempo real del primer embarque + actualizar tabla de estado
@@ -188,6 +209,6 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
 cd VigoCore && swift test 2>&1 | tail -3
 git log --oneline -5
 ```
-Al escribir este documento: 163 tests, 19 suites, todo verde en local (sin feed real) y
-también contra el feed real en `-c release` (`VIGO_GTFS_ZIP=/tmp/gtfs_vigo.zip`); árbol de
-trabajo limpio antes del commit del paso 7/11.
+Al escribir este documento: 163 tests de `VigoCore` en verde (paquete Swift; la app en
+`App/` se compila y verifica aparte con `xcodebuild`/el simulador); árbol de trabajo
+limpio antes del commit del paso 8/11.

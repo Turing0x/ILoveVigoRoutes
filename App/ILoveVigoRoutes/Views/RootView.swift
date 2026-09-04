@@ -5,7 +5,7 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var selection = AppTab.favourites
 
-    enum AppTab: Hashable { case favourites, nearby, search, map, sources }
+    enum AppTab: Hashable { case favourites, nearby, planner, search, map }
 
     var body: some View {
         TabView(selection: $selection) {
@@ -17,14 +17,15 @@ struct RootView: View {
             Tab("Cercanas", systemImage: "location.fill", value: AppTab.nearby) {
                 NearbyView()
             }
+            Tab("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond",
+                value: AppTab.planner) {
+                NavigationStack { PlannerPlaceholderView() }
+            }
             Tab("Buscar", systemImage: "magnifyingglass", value: AppTab.search) {
                 SearchView()
             }
             Tab("Mapa", systemImage: "map.fill", value: AppTab.map) {
                 StopsMapView()
-            }
-            Tab("Fuentes", systemImage: "info.circle", value: AppTab.sources) {
-                NavigationStack { DataSourcesView() }
             }
         }
         .overlay(alignment: .bottom) {
@@ -67,5 +68,18 @@ struct FirstImportOverlay: View {
         case .writing: "Guardando…"
         case .done, .none: "Preparando…"
         }
+    }
+}
+
+/// Stands in for the real `PlannerView` until it exists — this step is only the tab's
+/// wiring, not its screen.
+struct PlannerPlaceholderView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond")
+        } description: {
+            Text("La pantalla de planificación de rutas llega en el próximo paso.")
+        }
+        .navigationTitle("Planificar")
     }
 }
