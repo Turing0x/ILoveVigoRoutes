@@ -10,6 +10,7 @@ struct PlacePickerView: View {
     @State private var query = ""
     @State private var results: [Stop] = []
     @State private var favourites: [Stop] = []
+    @State private var addresses: AddressSearchModel?
     @State private var showingMapPicker = false
 
     let title: String
@@ -45,22 +46,29 @@ struct PlacePickerView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                } else if results.isEmpty {
-                    ContentUnavailableView.search(text: query)
                 } else {
-                    Section("Resultados") {
-                        ForEach(results) { stop in stopRow(stop) }
-                    }
+                    searchResults
+                }
+
+                if !query.isEmpty,
+                   results.isEmpty,
+                   addresses?.suggestions.isEmpty ?? true,
+                   addresses?.isSearching != true {
+                    ContentUnavailableView.search(text: query)
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            // Searching runs straight against SQLite on each keystroke; measured at
-            // 0.2 ms over the real 1149-stop table (SearchView), so there is nothing to
-            // debounce here either.
-            .searchable(text: $query, prompt: "Nombre de la parada o su número")
-            .onChange(of: query) { runSearch() }
+            // Dos búsquedas comparten este campo y no se parecen. La de paradas va directa a
+            // SQLite en cada pulsación — 0,2 ms sobre la tabla real de 1149 paradas — así que
+            // ahí no hay nada que debounce. La de direcciones es una ida y vuelta a Apple, así
+            // que espera 300 ms tras la última tecla; ver `AddressSearchModel`.
+            .searchable(text: $query, prompt: "Parada, dirección o lugar")
+            .onChange(of: query) {
+                runSearch()
+                addresses?.update(query: query)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar") { dismiss() }
@@ -71,8 +79,12 @@ struct PlacePickerView: View {
             location.requestPermissionIfNeeded()
             location.start()
             favourites = (try? environment.repository.favouriteStops()) ?? []
+            if addresses == nil { addresses = AddressSearchModel(service: environment.addressSearch) }
         }
-        .onDisappear { location.stop() }
+        .onDisappear {
+            location.stop()
+            addresses?.cancel()
+        }
         .sheet(isPresented: $showingMapPicker) {
             MapPointPickerView { coordinate in
                 pick(.coordinate(Coordinate(latitude: coordinate.latitude, longitude: coordinate.longitude),
@@ -95,6 +107,69 @@ struct PlacePickerView: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var searchResults: some View {
+        if !results.isEmpty {
+            Section("Paradas") {
+                ForEach(results) { stop in stopRow(stop) }
+            }
+        }
+
+        Section {
+            if addresses?.isSearching == true, addresses?.suggestions.isEmpty ?? true {
+                HStack {
+                    ProgressView()
+                    Text("Buscando direcciones…")
+                }
+            }
+
+            if let addresses {
+                ForEach(addresses.suggestions) { suggestion in
+                    addressRow(suggestion, addresses: addresses)
+                }
+
+                if addresses.failed {
+                    Text(addresses.failure == .outsideCoverage
+                         ? "Esa dirección queda fuera de la zona que cubre el feed."
+                         : "No he podido buscar direcciones ahora mismo.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Direcciones")
+        } footer: {
+            Text("Las direcciones las busca Apple Mapas. Tu ubicación no se envía: la búsqueda siempre se centra en Vigo.")
+        }
+    }
+
+    private func addressRow(_ suggestion: AddressSuggestion, addresses: AddressSearchModel) -> some View {
+        Button {
+            Task {
+                if let place = await addresses.resolve(suggestion) { pick(place) }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "mappin.and.ellipse")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(suggestion.title).font(.subheadline).lineLimit(2)
+                    if !suggestion.subtitle.isEmpty {
+                        Text(suggestion.subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if addresses.resolving == suggestion.id { ProgressView() }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(addresses.resolving != nil)
     }
 
     private func pickCurrentLocation() {

@@ -13,6 +13,9 @@ final class AppEnvironment {
     let arrivals: ArrivalsService
     let feedService: GTFSFeedService
     let planner: JourneyPlanner
+    /// One long-lived MapKit completer keeps address suggestions warm without learning or
+    /// sending the user's location: it always searches the fixed Vigo region.
+    let addressSearch: any AddressSearching
     private let timetableStore: TimetableStore
     private let throttledRealtime: ThrottledRealtimeProvider
 
@@ -43,6 +46,7 @@ final class AppEnvironment {
         let timetableStore = TimetableStore(repository: repository)
         self.timetableStore = timetableStore
         self.planner = JourneyPlanner(repository: repository, store: timetableStore)
+        self.addressSearch = MapKitAddressSearchService()
         self.feedStatus = (try? repository.feedStatus()) ?? .empty
 
         prewarmTimetable()

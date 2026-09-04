@@ -12,7 +12,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 0 — Verificación y cimientos | ✅ Hecha |
 | Fase 1 — Paradas y tiempo real | ✅ Hecha |
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
-| **Fase 3 — Planificador de rutas (RAPTOR)** | 🔶 **En curso: 3/11 pasos** |
+| **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | ⬜ No empezada |
 
 ---
@@ -231,6 +231,17 @@ el feed real, y las cuatro pantallas de la app (pestaña, selector de sitio, det
 trazado real, anotación de tiempo real) verificadas a mano en el simulador. Commits
 `fa01bd8`..`HEAD` en `main`. Próximo trabajo de fondo: Fase 2 (ferry) o Fase 4 (pulido) —
 ver `ILoveVigoRoutes-HANDOFF.md` para su alcance, que este documento no cubre.
+
+### Cambio posterior — geocodificación de direcciones
+
+- [x] El selector de origen/destino acepta ahora direcciones y puntos de interés mediante
+  Apple Mapas, siempre acotados a una región fija de Vigo. `MapKitAddressSearchService` queda
+  aislado detrás de `AddressSearching`; `AddressSearchModel` hace debounce de 300 ms y las
+  pruebas del target de app verifican el contrato con un stub, sin tocar `VigoCore`.
+- [x] La interfaz distingue las direcciones de las paradas, explica qué texto se envía a Apple
+  y nunca envía la ubicación del usuario. Una coordenada de `placemark` puede ser el centroide
+  de una calle y no el portal exacto, así que el tramo a pie hacia una dirección es menos fino
+  que el que termina en una parada.
 
 ## Verificación rápida del estado
 

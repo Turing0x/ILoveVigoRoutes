@@ -271,6 +271,14 @@ Refuerza la confianza en la frescura del GTFS.
 
 ## 3. Tiempo real: API del Concello (fuente primaria)
 
+### 3.0 Geocodificación de direcciones: Apple Maps / MapKit
+
+La búsqueda de direcciones usa `MKLocalSearchCompleter` y `MKLocalSearch`, sin claves de API,
+cuentas ni una dependencia nueva. Solo se manda a Apple el texto que el usuario escribe y una
+región fija centrada en Vigo; **nunca** se manda la ubicación actual. La región fija conserva la
+promesa de privacidad de `Info.plist` y es suficientemente amplia para Vigo y la red próxima.
+La aplicación resuelve una sugerencia solo cuando se toca, no cada resultado mientras se escribe.
+
 Extraída del código de **ambos** proyectos de referencia y verificada con `curl`.
 
 ### 3.1 Endpoint

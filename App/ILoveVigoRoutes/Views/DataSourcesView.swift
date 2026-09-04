@@ -89,7 +89,7 @@ struct DataSourcesView: View {
             }
 
             Section {
-                Text("Uso estrictamente personal. Sin cuentas, sin publicidad, sin telemetría. Nada de lo que haces en esta app sale del dispositivo.")
+                Text("Uso estrictamente personal. Sin cuentas, sin publicidad, sin telemetría. Lo único que sale del dispositivo son las peticiones a las fuentes de datos y, si buscas una dirección, el texto que escribes, que resuelve Apple Mapas. Tu ubicación nunca se envía.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
