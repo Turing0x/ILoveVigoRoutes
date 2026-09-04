@@ -172,7 +172,6 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   el placeholder. De paso, confirma en vivo lo que el paso 7 ya había medido: la ventana del
   feed real descargado hoy es 05/09–11/09, es decir, no cubre "hoy" (04/09).
 
-### Pendiente (orden del plan)
 - [x] **9/11 — `PlannerView` + `PlacePickerView`**
   `App/ILoveVigoRoutes/Views/PlannerView.swift`, `PlacePickerView.swift`,
   `MapPointPickerView.swift`, `JourneyRows.swift`.
@@ -208,33 +207,30 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   línea recta entre las dos paradas.
   Añadido de paso: `RepositoryTests.tripLookup` cubre el `trip(id:)` nuevo (encuentra el
   `shapeID`, y `nil` para un id inexistente).
-- [ ] 11/11 — Anotación con tiempo real del primer embarque + actualizar tabla de estado
-      de `README.md`.
+- [x] **11/11 — Anotación con tiempo real del primer embarque + `README.md`**
+  `App/ILoveVigoRoutes/Views/JourneyDetailView.swift`; `README.md` (tabla de estado).
+  `JourneyDetailView` cruza el primer tramo en autobús con `environment.arrivals` (la
+  misma `ArrivalsService` que ya usa el resto de la app): mismo `normalizedLine`, y de entre
+  las llegadas de esa línea en la parada de subida, la que tiene una hora implícita
+  (`ahora + minutos`) más cercana a la hora de salida ya fijada por la reconstrucción —
+  aceptada solo dentro de 15 minutos de margen, para no confundir el autobús que se busca
+  con el siguiente de la misma línea. Fuera del motor por diseño (la decisión de Fase 3 lo
+  dice explícitamente): el tiempo real solo anota, nunca decide la ruta. Con una consulta a
+  fecha futura (no "ahora") no hay nunca coincidencia, que es lo correcto — el tiempo real
+  no puede saber nada de un autobús que aún no está por llegar.
+  `README.md`: Fase 1 pasa de "Pendiente" a "Completa" (ya lo estaba, era una tabla
+  desactualizada) y Fase 3 pasa de "No iniciada" a "Completa (solo bus; el ferry entra
+  cuando exista la Fase 2)".
+  Verificado en el simulador contra el feed real: sin coincidencia para una consulta a
+  futuro (05/09 con "hoy" en 04/09) no aparece ningún aviso, y no hay ningún fallo — el
+  camino más frecuente en la práctica, ya que el feed real de esta sesión no cubre "ahora".
 
----
-
-## Cómo continuar
-
-1. Lee `ILoveVigoRoutes-HANDOFF.md` §6 (Fase 3) y el plan completo en
-   `~/.claude/plans/actua-como-un-planificador-immutable-parnas.md` para el detalle de
-   arquitectura de cada paso pendiente.
-2. Sigue el plan **tal cual**, un paso = un commit, compilando y con tests en verde antes
-   de pasar al siguiente.
-3. Al terminar un paso: actualiza este fichero (mover de "Pendiente" a "Hecho", anotar el
-   hash del commit y cualquier desviación del plan con su porqué) y haz commit del
-   `ESTADO.md` junto con el código.
-4. Antes de dar un paso por bueno, desconfía de una tanda de tests que pase a la primera
-   sin fallar nunca: prueba mutaciones puntuales del código nuevo (romper a mano una
-   invariante concreta) y comprueba que algún test la caza. El paso 3 tenía dos huecos así
-   — no son hipotéticos.
-5. `swift test` corre en segundos y no toca red; es lo que se ejecuta en cada paso.
-   Contra el feed real (necesario en el paso 7, opcional de sanity check en otros):
-   ```bash
-   curl -o /tmp/gtfs_vigo.zip https://datos.vigo.org/data/transporte/gtfs_vigo.zip
-   cd VigoCore && VIGO_GTFS_ZIP=/tmp/gtfs_vigo.zip swift test -c release
-   ```
-6. Repo en `https://github.com/Turing0x/ILoveVigoRoutes.git`, rama `main`. Push solo
-   cuando el usuario lo pida explícitamente.
+**Fase 3 completa — 11/11 pasos.** Motor RAPTOR contrastado por fuerza bruta, reconstrucción
+con ajuste hacia atrás, planificador cacheado con presupuesto de <1s medido en 40 ms contra
+el feed real, y las cuatro pantallas de la app (pestaña, selector de sitio, detalle con
+trazado real, anotación de tiempo real) verificadas a mano en el simulador. Commits
+`fa01bd8`..`HEAD` en `main`. Próximo trabajo de fondo: Fase 2 (ferry) o Fase 4 (pulido) —
+ver `ILoveVigoRoutes-HANDOFF.md` para su alcance, que este documento no cubre.
 
 ## Verificación rápida del estado
 
@@ -244,4 +240,4 @@ git log --oneline -5
 ```
 Al escribir este documento: 164 tests de `VigoCore` en verde (paquete Swift; la app en
 `App/` se compila y verifica aparte con `xcodebuild`/el simulador); árbol de trabajo
-limpio antes del commit del paso 10/11.
+limpio antes del commit del paso 11/11, el último de la Fase 3.

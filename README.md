@@ -114,9 +114,9 @@ impida confundirlos.
 | Fase | Estado |
 |---|---|
 | **Fase 0** — Verificación y cimientos | **Completa**, salvo los horarios de ferry (ver abajo) |
-| **Fase 1** — Paradas y tiempo real | Pendiente |
+| **Fase 1** — Paradas y tiempo real | **Completa** |
 | Fase 2 — Ferry de la ría | No iniciada |
-| Fase 3 — Planificador de rutas | No iniciada |
+| **Fase 3** — Planificador de rutas | **Completa** (solo bus; el ferry entra cuando exista la Fase 2) |
 | Fase 4 — Pulido y comodidades | No iniciada |
 
 **Punto abierto de la Fase 0:** los horarios de ferry (punto 5) **no se pudieron recopilar**.

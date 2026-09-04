@@ -10,10 +10,23 @@ struct JourneyDetailView: View {
 
     @State private var camera: MapCameraPosition = .automatic
     @State private var traces: [Trace] = []
+    @State private var liveFirstBoarding: Arrival?
 
     private struct Trace: Identifiable {
         let id: Int
         let coordinates: [CLLocationCoordinate2D]
+    }
+
+    /// The first ride — real time, kept out of `RaptorEngine` by design, is annotated only
+    /// here, and only for this one boarding: the rest of the journey is still the
+    /// timetable, and saying otherwise would be a promise the realtime source cannot keep.
+    private var firstRide: (routeShortName: String, board: Stop, departure: Date)? {
+        for leg in journey.legs {
+            if case .ride(_, let routeShortName, _, _, let board, _, let departure, _, _) = leg {
+                return (routeShortName, board, departure)
+            }
+        }
+        return nil
     }
 
     var body: some View {
@@ -30,6 +43,21 @@ struct JourneyDetailView: View {
                 .listRowInsets(EdgeInsets())
             }
 
+            if let firstRide, let liveFirstBoarding {
+                Section {
+                    HStack(spacing: 10) {
+                        DataKindBadge(kind: liveFirstBoarding.confidence.hasTrackedVehicle ? .tracked : .estimated)
+                        Text("Línea \(firstRide.routeShortName): \(WaitTime(minutes: liveFirstBoarding.minutes).inlineText)")
+                            .font(.subheadline)
+                        Spacer(minLength: 0)
+                    }
+                } header: {
+                    Text("Primer embarque, en vivo")
+                } footer: {
+                    Text("El resto del trayecto sigue siendo el horario: el tiempo real solo cubre la parada de origen.")
+                }
+            }
+
             Section("Tramos") {
                 ForEach(Array(journey.legs.enumerated()), id: \.offset) { _, leg in
                     JourneyLegRow(leg: leg)
@@ -38,7 +66,10 @@ struct JourneyDetailView: View {
         }
         .navigationTitle("Detalle del trayecto")
         .navigationBarTitleDisplayMode(.inline)
-        .task { load() }
+        .task {
+            load()
+            await loadLiveFirstBoarding()
+        }
     }
 
     @MapContentBuilder
@@ -85,6 +116,33 @@ struct JourneyDetailView: View {
             camera = .region(MKCoordinateRegion(
                 center: first, span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)))
         }
+    }
+
+    /// Matches the first ride against the realtime feed for its boarding stop.
+    ///
+    /// The realtime API has no notion of "this specific scheduled trip" — only a line, a
+    /// destination, and a countdown from now — so the match is heuristic: same line,
+    /// implied absolute time closest to the one this leg already committed to, and only
+    /// accepted within 15 minutes of it. Outside that window this is almost certainly a
+    /// different vehicle on the same line, and showing it would be worse than showing
+    /// nothing. A future-dated query (anything but "ahora") never matches, which is
+    /// correct: the realtime feed only ever knows about buses already close to arriving.
+    private func loadLiveFirstBoarding() async {
+        guard let firstRide else { return }
+        let normalizedLine = TextNormalization.normalizedLineName(firstRide.routeShortName)
+        let now = Date()
+        let result = await environment.arrivals.arrivals(for: firstRide.board, now: now)
+
+        let closest = result.arrivals
+            .filter { $0.normalizedLine == normalizedLine }
+            .min { a, b in
+                abs(now.addingTimeInterval(TimeInterval(a.minutes * 60)).timeIntervalSince(firstRide.departure))
+                    < abs(now.addingTimeInterval(TimeInterval(b.minutes * 60)).timeIntervalSince(firstRide.departure))
+            }
+        guard let closest else { return }
+        let impliedArrival = now.addingTimeInterval(TimeInterval(closest.minutes * 60))
+        guard abs(impliedArrival.timeIntervalSince(firstRide.departure)) <= 15 * 60 else { return }
+        liveFirstBoarding = closest
     }
 
     /// The shape covers the whole trip; a passenger only rode part of it. Cuts the
