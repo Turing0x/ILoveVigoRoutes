@@ -4,18 +4,17 @@ import VigoCore
 
 /// Leg by leg, with the real trace on the map — the first place `shapePoint` is read at
 /// all: it has been imported, indexed, and sitting unused since Fase 0.
+///
+/// The map here is a preview, not a tool: it is deliberately not interactive, and tapping it
+/// pushes `JourneyMapView`, where the same journey is drawn full screen with the user's own
+/// position on it.
 struct JourneyDetailView: View {
     @Environment(AppEnvironment.self) private var environment
     let journey: Journey
 
     @State private var camera: MapCameraPosition = .automatic
-    @State private var traces: [Trace] = []
+    @State private var traces: [JourneyTrace] = []
     @State private var liveFirstBoarding: Arrival?
-
-    private struct Trace: Identifiable {
-        let id: Int
-        let coordinates: [CLLocationCoordinate2D]
-    }
 
     /// The first ride — real time, kept out of `RaptorEngine` by design, is annotated only
     /// here, and only for this one boarding: the rest of the journey is still the
@@ -32,14 +31,28 @@ struct JourneyDetailView: View {
     var body: some View {
         List {
             Section {
-                Map(position: $camera) {
-                    ForEach(traces) { trace in
-                        MapPolyline(coordinates: trace.coordinates)
-                            .stroke(.indigo, lineWidth: 4)
+                NavigationLink {
+                    JourneyMapView(journey: journey, traces: traces)
+                } label: {
+                    ZStack(alignment: .bottomTrailing) {
+                        Map(position: $camera) {
+                            JourneyMapContent(journey: journey, traces: traces)
+                        }
+                        // A live `Map` swallows every gesture, so the row would never fire.
+                        // Turning hit testing off is what makes the whole preview a tap
+                        // target for the push.
+                        .allowsHitTesting(false)
+                        .frame(height: 260)
+
+                        Label("Ver mapa completo", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption2)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: Capsule())
+                            .padding(10)
                     }
-                    mapMarkers
                 }
-                .frame(height: 260)
+                .buttonStyle(.plain)
                 .listRowInsets(EdgeInsets())
             }
 
@@ -72,50 +85,9 @@ struct JourneyDetailView: View {
         }
     }
 
-    @MapContentBuilder
-    private var mapMarkers: some MapContent {
-        // The chain always opens and closes with a walk leg — into the network from the
-        // real origin, and out of it to the real destination — so these two are always
-        // present, `walkOnly` included (there `legs.first == legs.last`).
-        if case .walk(let from, _, _, _) = journey.legs.first {
-            Marker("Origen", systemImage: "figure.walk.departure", coordinate: from.coordinate.clLocation)
-                .tint(.blue)
-        }
-        if case .walk(_, let to, _, _) = journey.legs.last {
-            Marker("Destino", systemImage: "flag.checkered", coordinate: to.coordinate.clLocation)
-                .tint(.blue)
-        }
-        ForEach(Array(journey.legs.enumerated()), id: \.offset) { _, leg in
-            if case .ride(_, _, _, _, let board, let alight, _, _, _) = leg {
-                Marker(board.name, systemImage: "arrow.up.circle.fill",
-                      coordinate: CLLocationCoordinate2D(latitude: board.latitude, longitude: board.longitude))
-                    .tint(.green)
-                Marker(alight.name, systemImage: "arrow.down.circle.fill",
-                      coordinate: CLLocationCoordinate2D(latitude: alight.latitude, longitude: alight.longitude))
-                    .tint(.red)
-            }
-        }
-    }
-
     private func load() {
-        var found: [Trace] = []
-        for (index, leg) in journey.legs.enumerated() {
-            guard case .ride(_, _, _, let tripID, let board, let alight, _, _, _) = leg,
-                  let trip = try? environment.repository.trip(id: tripID),
-                  let shapeID = trip.shapeID,
-                  let points = try? environment.repository.shape(id: shapeID), points.count > 1
-            else { continue }
-
-            let coordinates = points.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-            let trimmed = Self.trim(coordinates, boardCoordinate: Coordinate(board), alightCoordinate: Coordinate(alight))
-            found.append(Trace(id: index, coordinates: trimmed))
-        }
-        traces = found
-
-        if let first = found.first(where: { !$0.coordinates.isEmpty })?.coordinates.first {
-            camera = .region(MKCoordinateRegion(
-                center: first, span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)))
-        }
+        traces = JourneyTraceBuilder.traces(for: journey, repository: environment.repository)
+        camera = .region(JourneyTraceBuilder.region(for: journey, traces: traces))
     }
 
     /// Matches the first ride against the realtime feed for its boarding stop.
@@ -143,38 +115,5 @@ struct JourneyDetailView: View {
         let impliedArrival = now.addingTimeInterval(TimeInterval(closest.minutes * 60))
         guard abs(impliedArrival.timeIntervalSince(firstRide.departure)) <= 15 * 60 else { return }
         liveFirstBoarding = closest
-    }
-
-    /// The shape covers the whole trip; a passenger only rode part of it. Cuts the
-    /// polyline down to the stretch between the two shape points closest to the boarding
-    /// and alighting stops — the "helper que recorte el trazado" the plan calls for.
-    ///
-    /// Closest-point matching, not sequence lookup: GTFS does not promise a shape point
-    /// exactly at every stop, only that the stops sit near the line it draws.
-    private static func trim(
-        _ coordinates: [CLLocationCoordinate2D], boardCoordinate: Coordinate, alightCoordinate: Coordinate
-    ) -> [CLLocationCoordinate2D] {
-        func nearestIndex(to target: Coordinate) -> Int {
-            var bestIndex = 0
-            var bestDistance = Double.greatestFiniteMagnitude
-            for (index, point) in coordinates.enumerated() {
-                let distance = TransitRepository.haversineMetres(
-                    point.latitude, point.longitude, target.latitude, target.longitude)
-                if distance < bestDistance { bestDistance = distance; bestIndex = index }
-            }
-            return bestIndex
-        }
-        let boardIndex = nearestIndex(to: boardCoordinate)
-        let alightIndex = nearestIndex(to: alightCoordinate)
-        let lower = min(boardIndex, alightIndex)
-        let upper = max(boardIndex, alightIndex)
-        guard lower < upper else { return coordinates }
-        return Array(coordinates[lower...upper])
-    }
-}
-
-private extension Coordinate {
-    var clLocation: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 }

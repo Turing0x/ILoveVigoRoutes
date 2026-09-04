@@ -57,6 +57,20 @@ public struct PlannerOptions: Sendable, Hashable {
     /// in this window is telling the truth rather than being impatient.
     public var searchHorizon: TimeInterval
 
+    /// How many alternatives the planner will hand back at most.
+    ///
+    /// Four is what fits on screen without scrolling past the fold, and past that the list
+    /// stops being a choice and becomes a timetable.
+    public var maxAlternatives: Int
+
+    /// How many times RAPTOR may be re-run from a later departure to fill that list.
+    ///
+    /// A single run only ever varies the number of transfers: every alternative it finds
+    /// leaves at the same time. What a passenger actually wants next to "this bus" is "the
+    /// one after it", and that is a second search starting just after the first boarding.
+    /// The bound is what stops a pathological query turning into an unbounded scan.
+    public var maxDepartureScans: Int
+
     /// How much time an extra transfer has to save before it is worth showing.
     ///
     /// RAPTOR's Pareto front routinely contains a journey that swaps a change of bus for
@@ -73,6 +87,8 @@ public struct PlannerOptions: Sendable, Hashable {
         footpathBufferSeconds: Int = 30,
         maxRounds: Int = 4,
         searchHorizon: TimeInterval = 3 * 3600,
+        maxAlternatives: Int = 4,
+        maxDepartureScans: Int = 4,
         extraTransferWorthSeconds: Int = 300
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
@@ -83,6 +99,8 @@ public struct PlannerOptions: Sendable, Hashable {
         self.footpathBufferSeconds = footpathBufferSeconds
         self.maxRounds = maxRounds
         self.searchHorizon = searchHorizon
+        self.maxAlternatives = maxAlternatives
+        self.maxDepartureScans = maxDepartureScans
         self.extraTransferWorthSeconds = extraTransferWorthSeconds
     }
 }

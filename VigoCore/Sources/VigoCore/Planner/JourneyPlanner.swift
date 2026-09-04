@@ -95,14 +95,8 @@ public struct JourneyPlanner: Sendable {
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
             return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres)))
         }
-        let raptorQuery = RaptorQuery(
-            access: accessWalks, egress: egressWalks,
-            departure: Int32(timetable.axisSeconds(for: query.departure)),
-            horizon: Int32(options.searchHorizon))
-        let result = RaptorEngine(options: options).run(timetable, raptorQuery)
-        let alternatives = JourneyReconstruction.alternatives(
-            timetable: timetable, result: result, query: raptorQuery,
-            origin: query.origin, destination: query.destination, options: options)
+        let alternatives = scan(timetable: timetable, access: accessWalks,
+                                egress: egressWalks, query: query)
 
         // A direct walk has no radius limit of its own, but one that would take longer than
         // the bus search is willing to look is not a "faster than the bus" fallback — it is
@@ -129,5 +123,92 @@ public struct JourneyPlanner: Sendable {
             return finish(.walkOnly(walkOnlyJourney()), feedStatus: feedStatus)
         }
         return finish(.journeys(alternatives), feedStatus: feedStatus)
+    }
+
+    // MARK: - Alternatives across departures
+
+    /// Runs RAPTOR once per departure time and collects what each run finds.
+    ///
+    /// One run only ever varies the vehicles taken: every journey it returns leaves at the
+    /// same moment and differs in transfers. That is a poor answer to "show me the options"
+    /// in a city where the real choice is usually *this* bus or the next one, so each pass
+    /// restarts the search one second after the earliest boarding the previous pass used —
+    /// which forces the next run onto a strictly later vehicle. `maxDepartureScans` bounds
+    /// the work and the search horizon bounds how far ahead the last pass may look, so the
+    /// loop always terminates.
+    private func scan(timetable: Timetable, access: [StopWalk], egress: [StopWalk],
+                     query: PlanQuery) -> [Journey] {
+        let start = Int32(timetable.axisSeconds(for: query.departure))
+        let deadline = start &+ Int32(options.searchHorizon)
+        var departure = start
+        var collected: [Journey] = []
+
+        for _ in 0..<max(1, options.maxDepartureScans) {
+            let batch = search(timetable: timetable, access: access, egress: egress,
+                               departure: departure, deadline: deadline, query: query)
+            guard !batch.isEmpty else { break }
+            collected.append(contentsOf: batch)
+            guard ranked(collected).count < options.maxAlternatives,
+                  let boarding = firstBoardingSeconds(of: batch, timetable: timetable)
+            else { break }
+            departure = boarding &+ 1
+            guard departure <= deadline else { break }
+        }
+        return ranked(collected)
+    }
+
+    private func search(timetable: Timetable, access: [StopWalk], egress: [StopWalk],
+                       departure: Int32, deadline: Int32, query: PlanQuery) -> [Journey] {
+        let raptorQuery = RaptorQuery(access: access, egress: egress,
+                                      departure: departure, horizon: deadline &- departure)
+        let result = RaptorEngine(options: options).run(timetable, raptorQuery)
+        return JourneyReconstruction.alternatives(
+            timetable: timetable, result: result, query: raptorQuery,
+            origin: query.origin, destination: query.destination, options: options)
+    }
+
+    /// The earliest moment any journey in `batch` gets on a vehicle. Restarting after it is
+    /// what makes the next pass find a later bus rather than the same one again. A journey
+    /// with no ride at all cannot say anything about that, and is ignored.
+    private func firstBoardingSeconds(of batch: [Journey], timetable: Timetable) -> Int32? {
+        var earliest: Int32?
+        for journey in batch {
+            for leg in journey.legs {
+                guard case .ride(_, _, _, _, _, _, let departure, _, _) = leg else { continue }
+                let seconds = Int32(timetable.axisSeconds(for: departure))
+                if earliest == nil || seconds < earliest! { earliest = seconds }
+                break
+            }
+        }
+        return earliest
+    }
+
+    /// Turns everything collected into the shortlist actually worth showing: no duplicates,
+    /// no dominated options, soonest arrival first.
+    ///
+    /// A journey dominates another when it leaves no earlier (less waiting), arrives no
+    /// later, and asks for no more transfers, while being strictly better in at least one of
+    /// the three. Journeys that tie on all three — a different line at the same times — are
+    /// both kept: neither is worse, and the pair is a genuine choice.
+    private func ranked(_ journeys: [Journey]) -> [Journey] {
+        var seen = Set<Journey>()
+        var unique: [Journey] = []
+        for journey in journeys where seen.insert(journey).inserted { unique.append(journey) }
+
+        func dominates(_ a: Journey, _ b: Journey) -> Bool {
+            guard a.departure >= b.departure, a.arrival <= b.arrival,
+                  a.transfers <= b.transfers else { return false }
+            return a.departure > b.departure || a.arrival < b.arrival || a.transfers < b.transfers
+        }
+
+        let kept = unique.filter { candidate in
+            !unique.contains { dominates($0, candidate) }
+        }
+        let sorted = kept.sorted { first, second in
+            first.arrival == second.arrival
+                ? first.departure > second.departure
+                : first.arrival < second.arrival
+        }
+        return Array(sorted.prefix(options.maxAlternatives))
     }
 }

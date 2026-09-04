@@ -318,4 +318,21 @@ struct JourneyReconstructionTests {
         #expect(journeys.count == 2)
         #expect(journeys.map(\.transfers) == [1, 0])
     }
+
+    @Test("The list of alternatives is capped by maxAlternatives")
+    func capIsRespected() throws {
+        // The same network that yields two alternatives, asked for one.
+        let (timetable, a, d) = Self.thresholdTimetable(secondLegArrival: T.at(7, 30))
+        let query = RaptorQuery(access: [StopWalk(stop: Int32(a), seconds: 0)],
+                                egress: [StopWalk(stop: Int32(d), seconds: 0)],
+                                departure: T.at(6, 0), horizon: 3 * 3_600)
+        let options = PlannerOptions(minTransferSeconds: 60, maxAlternatives: 1)
+        let result = RaptorEngine(options: options).run(timetable, query)
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: options)
+
+        #expect(journeys.count == 1)
+        #expect(journeys[0].transfers == 1, "the cap keeps the soonest arrival, not the first found")
+    }
 }

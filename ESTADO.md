@@ -243,12 +243,55 @@ ver `ILoveVigoRoutes-HANDOFF.md` para su alcance, que este documento no cubre.
   de una calle y no el portal exacto, así que el tramo a pie hacia una dirección es menos fino
   que el que termina en una parada.
 
+### Cambio posterior — origen automático, 4 alternativas y mapa de navegación
+
+- [x] **Origen por defecto = tu ubicación.** `PlacePickerView` devuelve ahora un `PickedPlace`
+  (el lugar y si vino del GPS), porque `Place` no puede distinguir "Mi ubicación" de una
+  dirección resuelta: las dos son `.coordinate`. `PlannerModel` guarda esa distinción en
+  `originFollowsLocation`: mientras sea cierto, cada nuevo fix actualiza el origen; elegir un
+  sitio a mano o intercambiar origen y destino lo apaga, y el botón "Usar mi ubicación" lo
+  vuelve a encender. `PlannerModel` pasa a recibir el `JourneyPlanner` en vez del
+  `AppEnvironment` entero, lo que lo hace comprobable sin CoreLocation ni base de datos en
+  disco (`App/ILoveVigoRoutesTests/PlannerModelTests.swift`, 6 tests).
+- [x] **4 alternativas, con salidas posteriores.** Una sola ejecución de RAPTOR solo varía los
+  transbordos: todas sus opciones salen a la misma hora, y con el filtro de
+  `extraTransferWorthSeconds` el resultado real era casi siempre 1. `JourneyPlanner` hace ahora
+  un escaneo tipo rRAPTOR: tras cada pasada reinicia la búsqueda un segundo después del primer
+  embarque encontrado, lo que obliga a la siguiente a coger un vehículo posterior. Cota doble
+  (`maxDepartureScans`, y el horizonte de búsqueda como fecha límite) para que el bucle termine
+  siempre. El conjunto se deduplica, se filtran los trayectos dominados (salir antes, llegar
+  después y con más transbordos no es alternativa de nadie) y se ordena por llegada, con tope
+  `maxAlternatives` (4). El `.prefix(3)` incrustado en `JourneyReconstruction` pasa a ser esa
+  misma opción.
+  Contra el feed real (Praza de América → Urzaiz, 09:00): **4 alternativas** con líneas
+  distintas — 17 (9:02→9:15), 11 (9:07→9:21), 10 (9:11→9:31) y C1 (9:15→9:33), todas directas.
+  Coste: 129 ms en frío (construcción del `Timetable` incluida) y **21,6 ms en caliente**, con
+  el presupuesto en 1 s.
+- [x] **Del minimapa al mapa de navegación.** `JourneyTraceBuilder` y `JourneyMapContent`
+  (`App/ILoveVigoRoutes/Views/JourneyTrace.swift`) sacan de `JourneyDetailView` la
+  construcción del trazado, el recorte por punto más cercano y los marcadores, para que las dos
+  pantallas dibujen exactamente el mismo trayecto. De paso, el encuadre deja de ser "el primer
+  punto con span fijo" y pasa a ser el rectángulo mínimo que contiene todo el trayecto: antes
+  los recorridos largos se salían de la vista.
+  El minimapa del detalle es ahora una vista previa no interactiva (`allowsHitTesting(false)`,
+  sin lo cual el `Map` se come el toque y el `NavigationLink` nunca dispara) que empuja
+  `JourneyMapView`: mapa a pantalla completa, `UserAnnotation`, cámara `.userLocation`
+  siguiendo con rumbo, botones "Seguirme" (visible en cuanto se mueve el mapa a mano) y "Ver
+  todo el trayecto". Mientras está abierto se desactiva el autobloqueo y `LocationProvider`
+  pide precisión `Best`, que restaura al salir; sigue siendo permiso `WhenInUse` y solo primer
+  plano, sin cambios en `Info.plist`. Sin lógica de progreso ni avisos de bajada: decisión
+  explícita, porque todo eso son promesas sobre el vehículo que el horario solo no puede
+  cumplir.
+
 ## Verificación rápida del estado
 
 ```bash
 cd VigoCore && swift test 2>&1 | tail -3
+xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: 164 tests de `VigoCore` en verde (paquete Swift; la app en
-`App/` se compila y verifica aparte con `xcodebuild`/el simulador); árbol de trabajo
-limpio antes del commit del paso 11/11, el último de la Fase 3.
+Al escribir este documento: **170 tests de `VigoCore` en verde** (164 antes de este cambio;
++5 en `JourneyAlternativesTests`, +1 en `JourneyReconstructionTests`), incluida la suite del
+feed real con `VIGO_GTFS_ZIP` apuntando al archivo publicado, y **12 tests del target de app**
+(`AddressSearchModelTests` + `PlannerModelTests`). Falta la comprobación a mano en dispositivo
+del seguimiento en movimiento, que no se puede hacer desde aquí.

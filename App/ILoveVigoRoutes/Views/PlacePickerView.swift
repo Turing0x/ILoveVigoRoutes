@@ -1,6 +1,25 @@
 import SwiftUI
 import VigoCore
 
+/// What the picker hands back: the place, and whether it came from the GPS.
+///
+/// `Place` cannot carry that distinction — "Mi ubicación", a resolved address and a tap on
+/// the map are all `.coordinate`, told apart only by a label — and the planner needs it: an
+/// origin that came from the GPS keeps following it, one the user chose does not.
+struct PickedPlace {
+    /// The label every GPS-derived place carries, shared so the planner's automatic origin
+    /// and this picker's own button produce the exact same `Place` value.
+    static let currentLocationLabel = "Mi ubicación"
+
+    let place: Place
+    let isCurrentLocation: Bool
+
+    static func currentLocation(_ coordinate: Coordinate) -> PickedPlace {
+        PickedPlace(place: .coordinate(coordinate, label: currentLocationLabel),
+                    isCurrentLocation: true)
+    }
+}
+
 /// Picks an origin or a destination: current location, a favourite, a search result, or a
 /// point tapped on the map — the four kinds of `Place` the handoff asks for.
 struct PlacePickerView: View {
@@ -14,7 +33,7 @@ struct PlacePickerView: View {
     @State private var showingMapPicker = false
 
     let title: String
-    let onPick: (Place) -> Void
+    let onPick: (PickedPlace) -> Void
 
     var body: some View {
         NavigationStack {
@@ -174,12 +193,13 @@ struct PlacePickerView: View {
 
     private func pickCurrentLocation() {
         guard let coordinate = location.coordinate else { return }
-        pick(.coordinate(Coordinate(latitude: coordinate.latitude, longitude: coordinate.longitude),
-                         label: "Mi ubicación"))
+        pick(PickedPlace.currentLocation(
+            Coordinate(latitude: coordinate.latitude, longitude: coordinate.longitude)).place,
+             isCurrentLocation: true)
     }
 
-    private func pick(_ place: Place) {
-        onPick(place)
+    private func pick(_ place: Place, isCurrentLocation: Bool = false) {
+        onPick(PickedPlace(place: place, isCurrentLocation: isCurrentLocation))
         dismiss()
     }
 

@@ -17,7 +17,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     /// Praza de América, used so the map and nearby list have somewhere sensible to sit
     /// before permission is granted. Never presented as the user's position.
-    static let vigoCentre = CLLocationCoordinate2D(latitude: 42.2328, longitude: -8.7226)
+    nonisolated static let vigoCentre = CLLocationCoordinate2D(latitude: 42.2328, longitude: -8.7226)
 
     override init() {
         authorization = manager.authorizationStatus
@@ -38,13 +38,18 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         if authorization == .notDetermined { manager.requestWhenInUseAuthorization() }
     }
 
-    func start() {
+    /// Hundred metres is enough to answer "which stops are near me", and cheap. Following
+    /// someone along a route is a different question, so that screen asks for better fixes
+    /// and this one goes back to the default as soon as it leaves.
+    func start(accuracy: CLLocationAccuracy = kCLLocationAccuracyHundredMeters) {
         guard isAuthorized else { return }
+        manager.desiredAccuracy = accuracy
         manager.startUpdatingLocation()
     }
 
     func stop() {
         manager.stopUpdatingLocation()
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {

@@ -14,7 +14,11 @@ public enum JourneyReconstruction {
     /// already a Pareto front, since a later round is only kept here when it bought an
     /// earlier arrival for one more transfer. Filtered so an extra transfer must save at
     /// least `options.extraTransferWorthSeconds` over the last alternative kept, sorted
-    /// soonest-arrival first, capped at three.
+    /// soonest-arrival first, capped at `options.maxAlternatives`.
+    ///
+    /// Every journey returned here leaves at the same time: rounds vary the vehicles taken,
+    /// not the departure. Offering "the next bus" as well is `JourneyPlanner`'s job, which
+    /// calls this once per departure it scans.
     public static func alternatives(
         timetable: Timetable, result: RaptorResult, query: RaptorQuery,
         origin: Place, destination: Place, options: PlannerOptions
@@ -43,7 +47,7 @@ public enum JourneyReconstruction {
             }
             kept.append(journey)
         }
-        return Array(kept.sorted { $0.arrival < $1.arrival }.prefix(3))
+        return Array(kept.sorted { $0.arrival < $1.arrival }.prefix(options.maxAlternatives))
     }
 
     /// The best way out of the network using at most `round` vehicles: for each egress
