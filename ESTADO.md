@@ -84,10 +84,32 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
   bug no tenía ningún test que lo detectara — los 14+4 tests de ejemplo del paso 3 pasaban
   igual de verdes con o sin él.
 
+- [x] **5/11 — Reconstrucción de viajes + ajuste hacia atrás + selección de alternativas**
+  `VigoCore/Sources/VigoCore/Planner/Place.swift`, `Journey.swift`, `JourneyReconstruction.swift`;
+  tests en `VigoCore/Tests/VigoCoreTests/JourneyReconstructionTests.swift`.
+  `Place` (parada, o coordenada con etiqueta — ubicación/mapa) y `Journey`/`JourneyLeg` tal
+  como los describe el plan. `JourneyReconstruction.alternatives` recorre los `parent` de
+  `RaptorResult` hacia atrás por ronda (un `.ride` retrocede a la ronda anterior en la
+  parada de subida, un `.walk` se queda en la misma ronda), arma la cadena hacia delante y
+  aplica la pasada de ajuste: desde la llegada fija del último tramo, cada tramo en autobús
+  se recalcula al **viaje más tardío** del mismo patrón que sigue llegando a tiempo, y el
+  límite se propaga hacia atrás restando `minTransferSeconds` (mismo andén),
+  `footpathBufferSeconds` + segundos de la caminata (transbordo a pie), o nada (tramo de
+  acceso, que fija la hora de salida real). Una ronda por candidata (ya es frente de
+  Pareto por construcción: más transbordos solo aparece si mejora la llegada), filtrado por
+  `extraTransferWorthSeconds` contra la última alternativa aceptada, orden por llegada,
+  tope de 3.
+  Verificado por mutación: anular la pasada de ajuste (usar siempre el viaje ya encontrado)
+  tumba el test dedicado con una red construida a propósito (tres viajes de un mismo patrón
+  cada 5 minutos hacia una única conexión fija) — sin esa red los ejemplos del paso 3/4 no
+  tenían margen suficiente para exponerlo, exactamente el mismo patrón de riesgo que ya
+  apareció en los pasos anteriores.
+  **Desviación del plan:** el fichero de test se llama `JourneyReconstructionTests.swift`,
+  no `JourneyPlannerTests.swift` — ese nombre lo tomará el paso 6, cuando exista de verdad
+  la fachada `JourneyPlanner` que el plan describe para ese fichero.
+
 ### Pendiente (orden del plan)
 
-- [ ] 5/11 — Reconstrucción de viajes + pasada de ajuste hacia atrás + selección de
-      alternativas.
 - [ ] 6/11 — `TimetableStore` (actor con caché) + `JourneyPlanner` (fachada pública) +
       todos los `PlanOutcome` de fallo.
 - [ ] 7/11 — Integración con el feed real + asserción de <1s en `RealFeedTimingTests`.
@@ -129,5 +151,5 @@ fuera del motor, RAPTOR y no CSA, `Timetable` en memoria sin migración de esque
 cd VigoCore && swift test 2>&1 | tail -3
 git log --oneline -5
 ```
-Al escribir este documento: 145 tests, 16 suites, todo verde; árbol de trabajo limpio antes
-del commit del paso 4/11.
+Al escribir este documento: 151 tests, 17 suites, todo verde; árbol de trabajo limpio antes
+del commit del paso 5/11.

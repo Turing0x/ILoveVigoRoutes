@@ -1,0 +1,228 @@
+import Foundation
+
+/// Turns a `RaptorResult` into `Journey` values.
+///
+/// Two passes. First, the parent pointers are walked backwards from a chosen egress stop
+/// into a forward chain of legs — RAPTOR's own earliest-arrival search, which boards the
+/// first catchable trip at every stage. Second, a backward-fit pass swaps each ride for the
+/// **latest** trip of the same pattern that still keeps every downstream connection: without
+/// it the first leg boards needlessly early, because "earliest arrival overall" says nothing
+/// about when the *first* vehicle has to leave.
+public enum JourneyReconstruction {
+
+    /// One alternative per round that actually improved the arrival at the destination —
+    /// already a Pareto front, since a later round is only kept here when it bought an
+    /// earlier arrival for one more transfer. Filtered so an extra transfer must save at
+    /// least `options.extraTransferWorthSeconds` over the last alternative kept, sorted
+    /// soonest-arrival first, capped at three.
+    public static func alternatives(
+        timetable: Timetable, result: RaptorResult, query: RaptorQuery,
+        origin: Place, destination: Place, options: PlannerOptions
+    ) -> [Journey] {
+        guard result.roundsRun >= 1 else { return [] }
+        let walk = WalkModel(options: options)
+
+        var byTransfersAscending: [Journey] = []
+        var lastRound = -1
+        for round in 1...result.roundsRun {
+            guard let candidate = bestEgress(upTo: round, result: result, query: query),
+                  candidate.round >= 1, candidate.round != lastRound
+            else { continue }
+            lastRound = candidate.round
+            byTransfersAscending.append(reconstruct(
+                timetable: timetable, result: result, round: candidate.round,
+                egressStop: candidate.stop, egressSeconds: candidate.seconds,
+                origin: origin, destination: destination, options: options, walk: walk))
+        }
+
+        var kept: [Journey] = []
+        for journey in byTransfersAscending {
+            if let last = kept.last {
+                let gained = last.arrival.timeIntervalSince(journey.arrival)
+                guard gained >= TimeInterval(options.extraTransferWorthSeconds) else { continue }
+            }
+            kept.append(journey)
+        }
+        return Array(kept.sorted { $0.arrival < $1.arrival }.prefix(3))
+    }
+
+    /// The best way out of the network using at most `round` vehicles: for each egress
+    /// stop, the highest round `<= round` that improved it — arrivals only ever get better
+    /// as rounds go on (`RaptorEngineTests.monotone`), so that is that round-budget's best,
+    /// even if `round` itself did not touch the stop.
+    private static func bestEgress(
+        upTo round: Int, result: RaptorResult, query: RaptorQuery
+    ) -> (round: Int, stop: Int, seconds: Int32, arrival: Int32)? {
+        var best: (round: Int, stop: Int, seconds: Int32, arrival: Int32)?
+        for exit in query.egress {
+            var r = round
+            while r >= 0 {
+                if let value = result.arrival(round: r, stop: Int(exit.stop)) {
+                    let total = value &+ exit.seconds
+                    if best == nil || total < best!.arrival {
+                        best = (r, Int(exit.stop), exit.seconds, total)
+                    }
+                    break
+                }
+                r -= 1
+            }
+        }
+        return best
+    }
+
+    // MARK: - Forward reconstruction
+
+    private struct Step {
+        let stop: Int
+        let parent: RaptorParent
+    }
+
+    private struct RideDraft {
+        let pattern: Int
+        var trip: Int
+        let boardPosition: Int
+        let alightPosition: Int
+    }
+
+    private enum Gap {
+        case access(seconds: Int32)
+        case sameStop
+        case walk(seconds: Int32)
+    }
+
+    private static func reconstruct(
+        timetable: Timetable, result: RaptorResult, round: Int,
+        egressStop: Int, egressSeconds: Int32,
+        origin: Place, destination: Place, options: PlannerOptions, walk: WalkModel
+    ) -> Journey {
+        // MARK: walk the parents back to the access leg
+        var chain: [Step] = []
+        var currentRound = round
+        var stop = egressStop
+        while let parent = result.parent(round: currentRound, stop: stop) {
+            chain.append(Step(stop: stop, parent: parent))
+            switch parent {
+            case .access:
+                currentRound = -1
+            case .ride(let pattern, _, let board, _):
+                stop = Int(timetable.stopIndex(pattern: Int(pattern), position: Int(board)))
+                currentRound -= 1
+            case .walk(let from, _):
+                stop = Int(from)
+            }
+            if currentRound < 0 { break }
+        }
+        chain.reverse()
+
+        // MARK: pull out the rides and what precedes each of them
+        var rides: [RideDraft] = []
+        var gapsBeforeRide: [Gap] = []
+        var pendingGap: Gap?
+        for step in chain {
+            switch step.parent {
+            case .access(let seconds):
+                pendingGap = .access(seconds: seconds)
+            case .walk(_, let seconds):
+                pendingGap = .walk(seconds: seconds)
+            case .ride(let pattern, let trip, let board, let alight):
+                rides.append(RideDraft(pattern: Int(pattern), trip: Int(trip),
+                                       boardPosition: Int(board), alightPosition: Int(alight)))
+                gapsBeforeRide.append(pendingGap ?? .sameStop)
+                pendingGap = nil
+            }
+        }
+
+        // MARK: backward fit — from the fixed final arrival, the latest trip per ride that
+        // still meets the connection already chosen for the leg after it.
+        var limit = timetable.arrival(pattern: rides[rides.count - 1].pattern,
+                                      trip: rides[rides.count - 1].trip,
+                                      position: rides[rides.count - 1].alightPosition)
+        for index in stride(from: rides.count - 1, through: 0, by: -1) {
+            let ride = rides[index]
+            let latest = latestTrip(timetable, pattern: ride.pattern,
+                                    position: ride.alightPosition, atMost: limit) ?? ride.trip
+            rides[index].trip = latest
+            let boardTime = timetable.departure(pattern: ride.pattern, trip: latest,
+                                                position: ride.boardPosition)
+            switch gapsBeforeRide[index] {
+            case .access:
+                limit = boardTime
+            case .sameStop:
+                limit = boardTime &- Int32(options.minTransferSeconds)
+            case .walk(let seconds):
+                limit = boardTime &- Int32(options.footpathBufferSeconds) &- seconds
+            }
+        }
+
+        // MARK: assemble legs, forward, using the fitted trips
+        var legs: [JourneyLeg] = []
+        var rideIndex = 0
+        var accessDeparture: Int32 = 0
+        for (index, step) in chain.enumerated() {
+            switch step.parent {
+            case .access(let seconds):
+                let firstBoard = rides[0]
+                let firstBoardTime = timetable.departure(
+                    pattern: firstBoard.pattern, trip: firstBoard.trip, position: firstBoard.boardPosition)
+                accessDeparture = firstBoardTime &- seconds
+                legs.append(.walk(from: origin, to: .stop(timetable.stops[step.stop]),
+                                  seconds: Int(seconds), metres: walk.metres(forSeconds: Int(seconds))))
+            case .walk(_, let seconds):
+                let source = chain[index - 1].stop
+                legs.append(.walk(from: .stop(timetable.stops[source]),
+                                  to: .stop(timetable.stops[step.stop]),
+                                  seconds: Int(seconds), metres: walk.metres(forSeconds: Int(seconds))))
+            case .ride:
+                let ride = rides[rideIndex]
+                rideIndex += 1
+                let boardStop = chain[index - 1].stop
+                let tripRef = timetable.tripRef(pattern: ride.pattern, trip: ride.trip)
+                let departSeconds = timetable.departure(pattern: ride.pattern, trip: ride.trip,
+                                                        position: ride.boardPosition)
+                let arriveSeconds = timetable.arrival(pattern: ride.pattern, trip: ride.trip,
+                                                      position: ride.alightPosition)
+                let intermediate = ((ride.boardPosition + 1)..<ride.alightPosition).map {
+                    timetable.stops[Int(timetable.stopIndex(pattern: ride.pattern, position: $0))]
+                }
+                legs.append(.ride(
+                    routeID: timetable.patternRouteID[ride.pattern],
+                    routeShortName: timetable.patternRouteShortName[ride.pattern],
+                    headsign: tripRef.headsign, tripID: tripRef.tripID,
+                    board: timetable.stops[boardStop], alight: timetable.stops[step.stop],
+                    departure: timetable.date(forAxisSeconds: Int(departSeconds)),
+                    arrival: timetable.date(forAxisSeconds: Int(arriveSeconds)),
+                    intermediateStops: intermediate))
+            }
+        }
+        legs.append(.walk(from: .stop(timetable.stops[egressStop]), to: destination,
+                          seconds: Int(egressSeconds), metres: walk.metres(forSeconds: Int(egressSeconds))))
+
+        let lastRide = rides[rides.count - 1]
+        let networkArrival = timetable.arrival(pattern: lastRide.pattern, trip: lastRide.trip,
+                                               position: lastRide.alightPosition)
+        return Journey(
+            legs: legs,
+            departure: timetable.date(forAxisSeconds: Int(accessDeparture)),
+            arrival: timetable.date(forAxisSeconds: Int(networkArrival &+ egressSeconds)),
+            transfers: rides.count - 1)
+    }
+
+    /// The trip of `pattern` with the **latest** arrival at `position` that is still
+    /// `<= atMost`. Sound for the same reason `RaptorEngine`'s own binary search is: trips
+    /// of a pattern never overtake one another, so arrival at a fixed position is monotone
+    /// in trip index.
+    private static func latestTrip(_ timetable: Timetable, pattern: Int, position: Int,
+                                   atMost: Int32) -> Int? {
+        let trips = timetable.tripCount(ofPattern: pattern)
+        var low = 0, high = trips
+        while low < high {
+            let mid = (low + high) / 2
+            if timetable.arrival(pattern: pattern, trip: mid, position: position) <= atMost {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low > 0 ? low - 1 : nil
+    }
+}

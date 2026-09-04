@@ -58,6 +58,14 @@ public struct WalkModel: Sendable {
             from.latitude, from.longitude, to.latitude, to.longitude)
     }
 
+    /// Undoes `seconds(metres:)`, for a walk leg that only has the seconds `Timetable`
+    /// stored — the exact metres were never carried past `footpaths(stops:)`. Approximate
+    /// by construction: `seconds(metres:)` rounds up, so this is a lower bound on the
+    /// distance that produced it, close enough for a UI figure already labelled an estimate.
+    public func metres(forSeconds seconds: Int) -> Double {
+        Double(seconds) * options.walkSpeedMetresPerSecond / options.walkDetourFactor
+    }
+
     public func seconds(from: Coordinate, to: Coordinate) -> Int {
         seconds(metres: metres(from: from, to: to))
     }
