@@ -9,23 +9,25 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            // Favourites first, deliberately: the acceptance criterion is that seeing a
-            // favourite stop's arrivals from a cold start takes one tap or none.
-            Tab("Favoritas", systemImage: "star.fill", value: AppTab.favourites) {
-                FavouritesView()
-            }
-            Tab("Cercanas", systemImage: "location.fill", value: AppTab.nearby) {
-                NearbyView()
+            Tab("Mapa", systemImage: "map.fill", value: AppTab.map) {
+                StopsMapView()
             }
             Tab("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond",
                 value: AppTab.planner) {
                 PlannerView()
             }
+            // Favourites selected first, deliberately: the acceptance criterion is that
+            // seeing a favourite stop's arrivals from a cold start takes one tap or none.
+            // Its position in the tab order is unrelated — `selection` above is what picks
+            // the launch tab, not declaration order.
+            Tab("Favoritas", systemImage: "star.fill", value: AppTab.favourites) {
+                FavouritesView()
+            }
             Tab("Buscar", systemImage: "magnifyingglass", value: AppTab.search) {
                 SearchView()
             }
-            Tab("Mapa", systemImage: "map.fill", value: AppTab.map) {
-                StopsMapView()
+            Tab("Cercanas", systemImage: "location.fill", value: AppTab.nearby) {
+                NearbyView()
             }
         }
         .overlay(alignment: .bottom) {

@@ -10,6 +10,8 @@ import VigoCore
 final class AppEnvironment {
     let database: AppDatabase
     let repository: TransitRepository
+    let favourites: FavouritesStore
+    let savedPlaces: SavedPlacesStore
     let arrivals: ArrivalsService
     let feedService: GTFSFeedService
     let planner: JourneyPlanner
@@ -36,6 +38,8 @@ final class AppEnvironment {
         self.database = db
         let repository = TransitRepository(database: db)
         self.repository = repository
+        self.favourites = FavouritesStore(repository: repository)
+        self.savedPlaces = SavedPlacesStore(repository: repository)
         let throttled = ThrottledRealtimeProvider(
             upstream: ConcelloRealtimeClient(), minimumInterval: 20)
         self.throttledRealtime = throttled
@@ -74,8 +78,12 @@ final class AppEnvironment {
         feedStatus.hasData && !feedStatus.covers(today)
     }
 
-    func refreshFeed(force: Bool = false) async {
-        guard !isRefreshing else { return }
+    /// - Returns: The outcome of the refresh, or `nil` if it was skipped (already running)
+    ///   or failed. `BackgroundRefresh` uses this to decide whether there is anything worth
+    ///   acting on; the foreground UI reads `feedStatus`/`importFailure` instead.
+    @discardableResult
+    func refreshFeed(force: Bool = false) async -> FeedRefreshOutcome? {
+        guard !isRefreshing else { return nil }
         isRefreshing = true
         importFailure = nil
         defer { isRefreshing = false; importProgress = nil }
@@ -91,9 +99,15 @@ final class AppEnvironment {
 
             if case .imported(let summary) = outcome { lastImportSummary = summary }
             feedStatus = (try? repository.feedStatus()) ?? feedStatus
+            // A reimport rewrites `stop` wholesale: every `Stop` value cached in
+            // `favourites` and `savedPlaces` is stale until reloaded.
+            favourites.reload()
+            savedPlaces.reload()
+            return outcome
         } catch {
             importFailure = (error as? CustomStringConvertible)?.description
                 ?? error.localizedDescription
+            return nil
         }
     }
 

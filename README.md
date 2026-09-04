@@ -117,7 +117,7 @@ impida confundirlos.
 | **Fase 1** — Paradas y tiempo real | **Completa** |
 | Fase 2 — Ferry de la ría | No iniciada |
 | **Fase 3** — Planificador de rutas | **Completa** (solo bus; el ferry entra cuando exista la Fase 2) |
-| Fase 4 — Pulido y comodidades | No iniciada |
+| Fase 4 — Pulido y comodidades | **Parcial**: lugares y trayectos guardados (CRUD completo), refresco del GTFS en segundo plano, orden de pestañas y estrella de favorito unificada. Quedan fuera, por decisión: widget de pantalla de inicio, atajos de Siri, accesibilidad exhaustiva |
 
 **Punto abierto de la Fase 0:** los horarios de ferry (punto 5) **no se pudieron recopilar**.
 Las tres navieras publican sus horarios en imágenes y tablas generadas por JavaScript, no

@@ -58,6 +58,7 @@ struct JourneyAlternativeRow: View {
 /// One leg, expanded: reused by `JourneyDetailView` once it exists, and here for the
 /// summary row's tap target until it does.
 struct JourneyLegRow: View {
+    @Environment(AppEnvironment.self) private var environment
     let leg: JourneyLeg
 
     var body: some View {
@@ -92,6 +93,27 @@ struct JourneyLegRow: View {
                 Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
+            // A ride row names two stops, board and alight, so a single swipe would be
+            // ambiguous about which one it favourites. A context menu with two explicit
+            // items is the gesture that can only mean one thing.
+            .contextMenu {
+                Button {
+                    environment.favourites.toggle(board)
+                } label: {
+                    Label(
+                        environment.favourites.contains(board.id)
+                            ? "Quitar \(board.name) de favoritas" : "Añadir \(board.name) a favoritas",
+                        systemImage: environment.favourites.contains(board.id) ? "star.slash" : "star.fill")
+                }
+                Button {
+                    environment.favourites.toggle(alight)
+                } label: {
+                    Label(
+                        environment.favourites.contains(alight.id)
+                            ? "Quitar \(alight.name) de favoritas" : "Añadir \(alight.name) a favoritas",
+                        systemImage: environment.favourites.contains(alight.id) ? "star.slash" : "star.fill")
+                }
+            }
         }
     }
 

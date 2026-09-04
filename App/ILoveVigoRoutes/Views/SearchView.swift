@@ -37,6 +37,7 @@ struct SearchView: View {
                                 }
                             }
                         }
+                        .favouriteActions(for: stop)
                     }
                 }
             }

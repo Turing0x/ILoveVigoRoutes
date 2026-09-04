@@ -363,6 +363,15 @@ public struct TransitRepository: Sendable {
         }
     }
 
+    /// Every favourite row, including ones whose stop_id the current feed no longer
+    /// contains. `favouriteStops()` compact-maps those away; this is how the UI can say so
+    /// out loud instead of silently shortening the list after a weekly refresh.
+    public func favouriteStopRows() throws -> [FavouriteStop] {
+        try database.writer.read { db in
+            try FavouriteStop.order(sql: "sortIndex, addedAt").fetchAll(db)
+        }
+    }
+
     public func favouriteStops() throws -> [Stop] {
         try database.writer.read { db in
             let favourites = try FavouriteStop.order(sql: "sortIndex, addedAt").fetchAll(db)
@@ -395,6 +404,245 @@ public struct TransitRepository: Sendable {
                                arguments: [index, id.rawValue])
             }
         }
+    }
+
+    // MARK: - Saved places
+
+    public func savedPlaces() throws -> [SavedPlace] {
+        try database.writer.read { db in
+            let rows = try SavedPlaceRow.order(sql: "sortIndex, createdAt").fetchAll(db)
+            let stops = try Self.resolveStops(for: rows.compactMap(\.stopID), db: db)
+            return rows.map { Self.savedPlace(from: $0, stops: stops) }
+        }
+    }
+
+    public func savedPlace(id: SavedPlaceID) throws -> SavedPlace? {
+        try database.writer.read { db in
+            guard let row = try SavedPlaceRow.fetchOne(db, key: id.rawValue) else { return nil }
+            let stops = try Self.resolveStops(for: [row.stopID].compactMap { $0 }, db: db)
+            return Self.savedPlace(from: row, stops: stops)
+        }
+    }
+
+    @discardableResult
+    public func createSavedPlace(
+        name: String, symbolName: String, anchor: SavedPlaceAnchorInput, now: Date = Date()
+    ) throws -> SavedPlace {
+        try database.writer.write { db in
+            let next = try Int.fetchOne(db, sql: "SELECT COALESCE(MAX(sortIndex), -1) + 1 FROM savedPlace") ?? 0
+            let row = SavedPlaceRow(
+                id: SavedPlaceID.generate().rawValue, name: name, symbolName: symbolName,
+                kind: anchor.kindString, stopID: anchor.stopIDString,
+                latitude: anchor.coordinate.latitude, longitude: anchor.coordinate.longitude,
+                createdAt: now, sortIndex: next)
+            try row.insert(db)
+            let stops = try Self.resolveStops(for: [row.stopID].compactMap { $0 }, db: db)
+            return Self.savedPlace(from: row, stops: stops)
+        }
+    }
+
+    public func updateSavedPlace(id: SavedPlaceID, _ edit: SavedPlaceEdit) throws {
+        try database.writer.write { db in
+            guard var row = try SavedPlaceRow.fetchOne(db, key: id.rawValue) else { return }
+            if let name = edit.name { row.name = name }
+            if let symbolName = edit.symbolName { row.symbolName = symbolName }
+            if let anchor = edit.anchor {
+                row.kind = anchor.kindString
+                row.stopID = anchor.stopIDString
+                row.latitude = anchor.coordinate.latitude
+                row.longitude = anchor.coordinate.longitude
+            }
+            try row.update(db)
+        }
+    }
+
+    /// Deleting a place must not leave a dangling reference in `savedJourney`: the
+    /// `ON DELETE SET NULL` on the schema says the intent, and these two explicit UPDATEs
+    /// in the same transaction mean correctness does not depend on that pragma alone.
+    public func deleteSavedPlace(id: SavedPlaceID) throws {
+        try database.writer.write { db in
+            try db.execute(sql: "UPDATE savedJourney SET originPlaceID = NULL WHERE originPlaceID = ?",
+                           arguments: [id.rawValue])
+            try db.execute(sql: "UPDATE savedJourney SET destinationPlaceID = NULL WHERE destinationPlaceID = ?",
+                           arguments: [id.rawValue])
+            _ = try SavedPlaceRow.deleteOne(db, key: id.rawValue)
+        }
+    }
+
+    public func reorderSavedPlaces(_ ordered: [SavedPlaceID]) throws {
+        try database.writer.write { db in
+            for (index, id) in ordered.enumerated() {
+                try db.execute(sql: "UPDATE savedPlace SET sortIndex = ? WHERE id = ?",
+                               arguments: [index, id.rawValue])
+            }
+        }
+    }
+
+    // MARK: - Saved journeys
+
+    public func savedJourneys() throws -> [SavedJourney] {
+        try database.writer.read { db in
+            let rows = try SavedJourneyRow.order(sql: "sortIndex, createdAt").fetchAll(db)
+            let placeIDs = Set(rows.flatMap { [$0.originPlaceID, $0.destinationPlaceID] }.compactMap { $0 })
+            let placeRows = placeIDs.isEmpty ? [] : try SavedPlaceRow.filter(keys: Array(placeIDs)).fetchAll(db)
+
+            var stopIDs = Set(placeRows.compactMap(\.stopID))
+            stopIDs.formUnion(rows.compactMap(\.originStopID))
+            stopIDs.formUnion(rows.compactMap(\.destinationStopID))
+            let stops = try Self.resolveStops(for: Array(stopIDs), db: db)
+
+            var places: [String: SavedPlace] = [:]
+            for row in placeRows { places[row.id] = Self.savedPlace(from: row, stops: stops) }
+            return rows.map { Self.savedJourney(from: $0, places: places, stops: stops) }
+        }
+    }
+
+    public func savedJourney(id: SavedJourneyID) throws -> SavedJourney? {
+        try database.writer.read { db in
+            guard let row = try SavedJourneyRow.fetchOne(db, key: id.rawValue) else { return nil }
+            return try Self.resolvedJourney(row, db: db)
+        }
+    }
+
+    @discardableResult
+    public func createSavedJourney(
+        customLabel: String?, origin: SavedEndpointInput, destination: SavedEndpointInput,
+        now: Date = Date()
+    ) throws -> SavedJourney {
+        try database.writer.write { db in
+            let next = try Int.fetchOne(db, sql: "SELECT COALESCE(MAX(sortIndex), -1) + 1 FROM savedJourney") ?? 0
+            let row = SavedJourneyRow(
+                id: SavedJourneyID.generate().rawValue, customLabel: customLabel,
+                createdAt: now, sortIndex: next,
+                originPlaceID: origin.placeID?.rawValue, originName: origin.name,
+                originSymbolName: origin.symbolName, originKind: origin.anchor.kindString,
+                originStopID: origin.anchor.stopIDString,
+                originLatitude: origin.anchor.coordinate.latitude,
+                originLongitude: origin.anchor.coordinate.longitude,
+                destinationPlaceID: destination.placeID?.rawValue, destinationName: destination.name,
+                destinationSymbolName: destination.symbolName, destinationKind: destination.anchor.kindString,
+                destinationStopID: destination.anchor.stopIDString,
+                destinationLatitude: destination.anchor.coordinate.latitude,
+                destinationLongitude: destination.anchor.coordinate.longitude)
+            try row.insert(db)
+            return try Self.resolvedJourney(row, db: db)
+        }
+    }
+
+    public func updateSavedJourney(id: SavedJourneyID, _ edit: SavedJourneyEdit) throws {
+        try database.writer.write { db in
+            guard var row = try SavedJourneyRow.fetchOne(db, key: id.rawValue) else { return }
+            switch edit.label {
+            case .unchanged: break
+            case .custom(let text): row.customLabel = text
+            case .derived: row.customLabel = nil
+            }
+            if let origin = edit.origin {
+                row.originPlaceID = origin.placeID?.rawValue
+                row.originName = origin.name
+                row.originSymbolName = origin.symbolName
+                row.originKind = origin.anchor.kindString
+                row.originStopID = origin.anchor.stopIDString
+                row.originLatitude = origin.anchor.coordinate.latitude
+                row.originLongitude = origin.anchor.coordinate.longitude
+            }
+            if let destination = edit.destination {
+                row.destinationPlaceID = destination.placeID?.rawValue
+                row.destinationName = destination.name
+                row.destinationSymbolName = destination.symbolName
+                row.destinationKind = destination.anchor.kindString
+                row.destinationStopID = destination.anchor.stopIDString
+                row.destinationLatitude = destination.anchor.coordinate.latitude
+                row.destinationLongitude = destination.anchor.coordinate.longitude
+            }
+            try row.update(db)
+        }
+    }
+
+    public func deleteSavedJourney(id: SavedJourneyID) throws {
+        try database.writer.write { db in
+            _ = try SavedJourneyRow.deleteOne(db, key: id.rawValue)
+        }
+    }
+
+    public func reorderSavedJourneys(_ ordered: [SavedJourneyID]) throws {
+        try database.writer.write { db in
+            for (index, id) in ordered.enumerated() {
+                try db.execute(sql: "UPDATE savedJourney SET sortIndex = ? WHERE id = ?",
+                               arguments: [index, id.rawValue])
+            }
+        }
+    }
+
+    // MARK: - Saved place / journey row mapping
+
+    private static func resolveStops(for stopIDs: [String], db: Database) throws -> [String: Stop] {
+        guard !stopIDs.isEmpty else { return [:] }
+        let stops = try Stop.filter(keys: Set(stopIDs)).fetchAll(db)
+        return Dictionary(uniqueKeysWithValues: stops.map { ($0.id.rawValue, $0) })
+    }
+
+    private static func anchor(
+        kind: String, stopID: String?, latitude: Double, longitude: Double, stops: [String: Stop]
+    ) -> SavedPlaceAnchor {
+        guard kind == "stop", let stopID else {
+            return .coordinate(Coordinate(latitude: latitude, longitude: longitude))
+        }
+        if let stop = stops[stopID] { return .stop(stop) }
+        return .orphanedStop(StopID(stopID), fallback: Coordinate(latitude: latitude, longitude: longitude))
+    }
+
+    private static func savedPlace(from row: SavedPlaceRow, stops: [String: Stop]) -> SavedPlace {
+        SavedPlace(
+            id: SavedPlaceID(row.id), name: row.name, symbolName: row.symbolName,
+            anchor: anchor(kind: row.kind, stopID: row.stopID,
+                          latitude: row.latitude, longitude: row.longitude, stops: stops),
+            createdAt: row.createdAt, sortIndex: row.sortIndex)
+    }
+
+    private static func endpoint(
+        placeID: String?, name: String, symbolName: String, kind: String, stopID: String?,
+        latitude: Double, longitude: Double, places: [String: SavedPlace], stops: [String: Stop]
+    ) -> SavedEndpoint {
+        if let placeID, let place = places[placeID] {
+            return SavedEndpoint(placeID: place.id, name: place.name, symbolName: place.symbolName,
+                                 anchor: place.anchor)
+        }
+        let resolved = anchor(kind: kind, stopID: stopID, latitude: latitude, longitude: longitude, stops: stops)
+        return SavedEndpoint(placeID: nil, name: name, symbolName: symbolName, anchor: resolved)
+    }
+
+    private static func savedJourney(
+        from row: SavedJourneyRow, places: [String: SavedPlace], stops: [String: Stop]
+    ) -> SavedJourney {
+        SavedJourney(
+            id: SavedJourneyID(row.id), customLabel: row.customLabel,
+            origin: endpoint(placeID: row.originPlaceID, name: row.originName,
+                            symbolName: row.originSymbolName, kind: row.originKind,
+                            stopID: row.originStopID, latitude: row.originLatitude,
+                            longitude: row.originLongitude, places: places, stops: stops),
+            destination: endpoint(placeID: row.destinationPlaceID, name: row.destinationName,
+                                 symbolName: row.destinationSymbolName, kind: row.destinationKind,
+                                 stopID: row.destinationStopID, latitude: row.destinationLatitude,
+                                 longitude: row.destinationLongitude, places: places, stops: stops),
+            createdAt: row.createdAt, sortIndex: row.sortIndex)
+    }
+
+    /// Resolves a single saved journey row: its endpoints' live-linked places (if any) and
+    /// every stop_id involved, in one extra read each — used by `createSavedJourney` and
+    /// `savedJourney(id:)`, where `savedJourneys()` instead resolves all rows in one batch.
+    private static func resolvedJourney(_ row: SavedJourneyRow, db: Database) throws -> SavedJourney {
+        let placeIDs = [row.originPlaceID, row.destinationPlaceID].compactMap { $0 }
+        let placeRows = placeIDs.isEmpty ? [] : try SavedPlaceRow.filter(keys: placeIDs).fetchAll(db)
+
+        var stopIDs = Set(placeRows.compactMap(\.stopID))
+        if let s = row.originStopID { stopIDs.insert(s) }
+        if let s = row.destinationStopID { stopIDs.insert(s) }
+        let stops = try resolveStops(for: Array(stopIDs), db: db)
+
+        var places: [String: SavedPlace] = [:]
+        for placeRow in placeRows { places[placeRow.id] = savedPlace(from: placeRow, stops: stops) }
+        return savedJourney(from: row, places: places, stops: stops)
     }
 
     // MARK: - Geometry

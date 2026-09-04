@@ -85,6 +85,23 @@ struct PlannerModelTests {
         #expect(model.origin?.coordinate == there, "tras intercambiar, el GPS ya no manda")
     }
 
+    @Test("Fijar el origen desde un lugar guardado usa su nombre y deja de seguir el GPS")
+    func settingOriginFromSavedPlace() throws {
+        let model = try makeModel()
+        model.updateCurrentLocation(here)
+
+        let home = SavedPlace(id: SavedPlaceID.generate(), name: "Casa", symbolName: "house.fill",
+                              anchor: .coordinate(there), createdAt: Date(), sortIndex: 0)
+        model.setOrigin(PickedPlace(place: home.place, isCurrentLocation: false))
+
+        #expect(model.origin?.label == "Casa")
+        #expect(model.origin?.coordinate == there)
+        #expect(!model.originFollowsLocation)
+
+        model.updateCurrentLocation(here)
+        #expect(model.origin?.label == "Casa", "una actualización del GPS no puede pisar un lugar guardado")
+    }
+
     @Test("Sin origen y sin destino no se puede planificar")
     func cannotPlanWithoutBothEnds() throws {
         let model = try makeModel()

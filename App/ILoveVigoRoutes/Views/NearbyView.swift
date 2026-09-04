@@ -96,6 +96,7 @@ struct NearbyView: View {
                 }
                 .padding(.vertical, 2)
             }
+            .favouriteActions(for: nearby.stop)
         }
         .listStyle(.plain)
         .refreshable { refresh() }

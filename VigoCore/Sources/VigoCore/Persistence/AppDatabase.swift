@@ -133,6 +133,51 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v2") { db in
+            // More user data, in the same file and equally untouched by the importer.
+            try db.create(table: "savedPlace") { t in
+                t.primaryKey("id", .text)
+                t.column("name", .text).notNull()
+                t.column("symbolName", .text).notNull()
+                t.column("kind", .text).notNull()          // "stop" | "coordinate"
+                // Deliberately NOT a foreign key to `stop`: the importer deletes every row
+                // of that table on each refresh, so an FK would either cascade the user's
+                // places away or block the import outright. The reference is resolved at
+                // read time, and the coordinate below is what keeps an orphaned place
+                // usable when the feed no longer has this stop_id.
+                t.column("stopID", .text)
+                t.column("latitude", .double).notNull()
+                t.column("longitude", .double).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.column("sortIndex", .integer).notNull().defaults(to: 0)
+            }
+            try db.create(index: "savedPlace_sortIndex", on: "savedPlace", columns: ["sortIndex"])
+
+            try db.create(table: "savedJourney") { t in
+                t.primaryKey("id", .text)
+                t.column("customLabel", .text)             // null: derive from the endpoints
+                t.column("createdAt", .datetime).notNull()
+                t.column("sortIndex", .integer).notNull().defaults(to: 0)
+                for end in ["origin", "destination"] {
+                    // Live link, nulled when the place is deleted so the journey survives
+                    // (see `deleteSavedPlace`, which also nulls this explicitly in the same
+                    // transaction — correctness does not depend on `onDelete` alone).
+                    t.column("\(end)PlaceID", .text)
+                        .references("savedPlace", column: "id", onDelete: .setNull)
+                    t.column("\(end)Name", .text).notNull()
+                    t.column("\(end)SymbolName", .text).notNull()
+                    t.column("\(end)Kind", .text).notNull()
+                    t.column("\(end)StopID", .text)
+                    t.column("\(end)Latitude", .double).notNull()
+                    t.column("\(end)Longitude", .double).notNull()
+                }
+            }
+            try db.create(index: "savedJourney_sortIndex", on: "savedJourney", columns: ["sortIndex"])
+            try db.create(index: "savedJourney_originPlaceID", on: "savedJourney", columns: ["originPlaceID"])
+            try db.create(index: "savedJourney_destinationPlaceID", on: "savedJourney",
+                         columns: ["destinationPlaceID"])
+        }
+
         return migrator
     }
 }

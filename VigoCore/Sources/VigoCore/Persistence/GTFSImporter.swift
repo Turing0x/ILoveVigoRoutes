@@ -41,7 +41,8 @@ public enum ImportError: Error, CustomStringConvertible, Sendable {
 /// Idempotent by construction: the whole swap happens in one transaction that first
 /// clears the static tables, so importing the same feed twice leaves the database
 /// identical and a failure part-way through leaves the previous feed intact. User data
-/// (favourites, cached arrivals) lives in tables the importer never touches.
+/// (favourites, cached arrivals, saved places, saved journeys) lives in tables the
+/// importer never touches.
 public struct GTFSImporter: Sendable {
     let database: AppDatabase
 
@@ -79,7 +80,8 @@ public struct GTFSImporter: Sendable {
         }
 
         try database.writer.write { db in
-            // Static tables only. favouriteStop and cachedArrivals are untouched.
+            // Static tables only. favouriteStop, cachedArrivals, savedPlace and
+            // savedJourney are untouched.
             for table in ["stopRoute", "stopTime", "shapePoint", "trip",
                           "calendarDate", "calendarEntry", "route", "stop"] {
                 try db.execute(sql: "DELETE FROM \(table)")

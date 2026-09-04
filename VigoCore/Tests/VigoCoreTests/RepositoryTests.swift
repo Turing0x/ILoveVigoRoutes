@@ -46,6 +46,37 @@ struct RepositoryTests {
         #expect(try repository.favouriteStopIDs() == [StopID("3493")])
     }
 
+    @Test("Import preserves saved places and journeys")
+    func importKeepsSavedPlacesAndJourneys() throws {
+        let db = try Fixture.importedDatabase()
+        let repository = TransitRepository(database: db)
+        let stop = try #require(try repository.stop(id: StopID("3493")))
+        let place = try repository.createSavedPlace(name: "Casa", symbolName: "house.fill", anchor: .stop(stop))
+        let other = try repository.createSavedPlace(
+            name: "Trabajo", symbolName: "briefcase.fill", anchor: .coordinate(.init(latitude: 1, longitude: 1)))
+        let journey = try repository.createSavedJourney(
+            customLabel: nil, origin: .savedPlace(place), destination: .savedPlace(other))
+
+        let parsed = try GTFSParser().parse(from: Fixture.provider)
+        _ = try GTFSImporter(database: db).import(feed: parsed.feed)
+
+        #expect(try repository.savedPlace(id: place.id) != nil)
+        #expect(try repository.savedPlace(id: other.id) != nil)
+        #expect(try repository.savedJourney(id: journey.id) != nil)
+    }
+
+    /// A favourited stop the current feed no longer has stays in the raw rows — so it can
+    /// come back if a later feed restores it — but is never silently shown as resolved.
+    @Test("A favourite whose stop vanished stays in the rows, not in the resolved list")
+    func vanishedFavouriteIsRowOnlyNotResolved() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        try repository.setFavourite(StopID("3493"), true)
+        try repository.setFavourite(StopID("NO-SUCH-STOP"), true)
+
+        #expect(try repository.favouriteStopRows().map(\.stopID) == [StopID("3493"), StopID("NO-SUCH-STOP")])
+        #expect(try repository.favouriteStops().map(\.id) == [StopID("3493")])
+    }
+
     @Test("A feed that fails validation is rejected and leaves the old data alone")
     func rejectsBadFeed() throws {
         let db = try Fixture.importedDatabase()

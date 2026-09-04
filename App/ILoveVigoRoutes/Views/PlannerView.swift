@@ -183,10 +183,10 @@ struct PlannerView: View {
             }
         }
         .sheet(isPresented: $pickingOrigin) {
-            PlacePickerView(title: "Origen") { model.setOrigin($0) }
+            PlacePickerView(title: "Origen", role: .origin) { model.setOrigin($0) }
         }
         .sheet(isPresented: $pickingDestination) {
-            PlacePickerView(title: "Destino") { model.setDestination($0) }
+            PlacePickerView(title: "Destino", role: .destination) { model.setDestination($0) }
         }
     }
 

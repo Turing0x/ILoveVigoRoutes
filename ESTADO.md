@@ -13,7 +13,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 1 — Paradas y tiempo real | ✅ Hecha |
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
-| Fase 4 — Pulido y comodidades | ⬜ No empezada |
+| Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
 
 ---
 
@@ -283,6 +283,112 @@ ver `ILoveVigoRoutes-HANDOFF.md` para su alcance, que este documento no cubre.
   explícita, porque todo eso son promesas sobre el vehículo que el horario solo no puede
   cumplir.
 
+## Fase 4 — Lugares/trayectos guardados y refresco en segundo plano
+
+Plan detallado en `~/.claude/plans/humble-hopping-backus.md`. Alcance: lo que pedía el
+propietario (CRUD completo de lugares y trayectos guardados, orden de pestañas, estrella de
+favorito unificada, refresco del GTFS en segundo plano), descartando explícitamente el widget
+de WidgetKit — y con él el App Group y la reubicación de la base de datos — por complejidad
+desproporcionada para lo que aporta ahora mismo.
+
+### Hecho
+
+- [x] **Reordenar pestañas.** `App/ILoveVigoRoutes/Views/RootView.swift`: Mapa → Planificar →
+  Favoritas → Buscar → Cercanas. La pestaña de arranque sigue siendo Favoritas
+  (`selection = .favourites`) — el orden de declaración de las `Tab` no decide cuál se
+  selecciona al arrancar, solo el orden visual.
+
+- [x] **`FavouritesStore`: una sola fuente de verdad para el estado de favorito.**
+  `App/ILoveVigoRoutes/FavouritesStore.swift` (nuevo), propiedad de `AppEnvironment`.
+  Arregla el bug real que motivó este paso: `StopDetailModel.isFavourite` se fotografiaba en
+  el `init` y `FavouritesModel` guardaba su propia copia de `[Stop]`, así que marcar una
+  parada en una pantalla dejaba la estrella de otra pantalla equivocada hasta que recargara
+  por su cuenta. `TransitRepository` gana `favouriteStopRows()` (todas las filas, incluida la
+  de una parada que el feed vigente ya no tiene) para poder decirlo en voz alta
+  (`unresolvedIDs`) en vez de descartarla en silencio. `AppEnvironment.refreshFeed` recarga el
+  store tras cada reimportación.
+  Test de regresión: `App/ILoveVigoRoutesTests/FavouritesStoreTests.swift` — un store, dos
+  lectores, mutar por un camino y comprobar que el otro lo ve.
+
+- [x] **Estrella de favorito en todas las pantallas.**
+  `App/ILoveVigoRoutes/Views/FavouriteAffordance.swift` (nuevo): `FavouriteStarButton`
+  (barra), swipe (borde izquierdo) + menú contextual reutilizables vía
+  `.favouriteActions(for:)`. Aplicado a `NearbyView`, `SearchView` y a las filas de parada de
+  `PlacePickerView`. `StopsMapView` no necesitó nada nuevo: su hoja de selección ya empuja
+  `StopDetailView`, cuya estrella pasa a leer del store. `JourneyDetailView`/`JourneyRows.swift`
+  usa solo menú contextual (dos entradas explícitas, una por parada) porque una fila `.ride`
+  muestra origen y destino a la vez — un swipe ahí sería ambiguo sobre cuál de los dos.
+
+- [x] **VigoCore: persistencia de lugares y trayectos guardados.**
+  `VigoCore/Sources/VigoCore/Persistence/SavedPlaceRecords.swift` (nuevo): `SavedPlace`,
+  `SavedJourney`, `SavedPlaceAnchor` (`.stop` / `.orphanedStop` / `.coordinate`),
+  `SavedEndpoint` (enlace vivo a un lugar guardado, con una instantánea congelada para cuando
+  el enlace desaparece). Migración `"v2"` en `AppDatabase.swift` (tablas `savedPlace` y
+  `savedJourney`, sin FK a `stop` — el importador la borra y reescribe entera cada semana).
+  CRUD completo en `TransitRepository.swift`. Regla que gobierna todo el diseño: nunca se
+  persiste un `Stop`; un lugar anclado a parada guarda `stopID` + coordenada de respaldo y se
+  resuelve contra la tabla `stop` viva en cada lectura, degradando a `.orphanedStop` (todavía
+  planificable) si el feed ya no la tiene.
+  Verificado por tests: `SavedPlacesTests.swift` (19 tests — CRUD completo, plantillas no son
+  huecos únicos, resolución contra el `Stop` vivo tras reimportar, orfandad, propagación de
+  renombrados a un trayecto, `customLabel` frente a derivado, extremos ad-hoc nunca
+  enlazados), `MigrationTests.swift` (datos de `v1` sobreviven a `v2`), y ampliación de
+  `RepositoryTests.swift` (lugares/trayectos sobreviven a una reimportación; una favorita cuya
+  parada desapareció se queda en las filas crudas pero no en la lista resuelta).
+
+- [x] **UI de lugares y trayectos guardados.**
+  `App/ILoveVigoRoutes/SavedPlacesStore.swift` (nuevo, hermano de `FavouritesStore`),
+  `Views/SavedPlaceEditorView.swift` y `Views/SavedJourneyEditorView.swift` (nuevos, crear y
+  editar comparten formulario). Plantillas (Casa/Trabajo/Hospital/Centro de salud/Gimnasio/
+  Otro) solo prerrellenan nombre e icono al crear — no hay columna de plantilla ni singleton,
+  dos lugares de la misma plantilla conviven con nombres propios.
+  `FavouritesView.swift` reescrita con tres secciones (Trayectos guardados, Lugares, Paradas
+  favoritas), cada una con `.onDelete`/`.onMove`/menú contextual (Editar/Duplicar/Eliminar) y
+  un menú "+" para crear. Tocar un trayecto lo planifica al instante
+  (`SavedJourneyPlanModel` + `.navigationDestination(item:)` hacia la mejor alternativa).
+  `PlacePickerView` gana secciones "Lugares guardados" y "Trayectos guardados" (esta última
+  solo cuando se le pasa un `role: .origin`/`.destination`, para elegir el extremo correcto y
+  no recursar al elegir el extremo de un trayecto nuevo), más un swipe "Guardar" en filas de
+  parada y de dirección resuelta (`SavedPlaceEditorView(mode: .createFrom(place))`).
+  **Bug encontrado y corregido durante la verificación en el simulador:** el aviso de
+  extremo "ya no existe" se disparaba también para un extremo elegido ad-hoc a propósito
+  (`Elegir otro lugar`), que es `isDetached == true` por diseño, no por borrado — un aviso
+  falso. Corregido para avisar solo cuando el ancla de un extremo está realmente huérfana
+  (`anchor.isOrphaned`, parada que el feed ya no tiene), la única señal que de verdad se puede
+  verificar.
+  Verificado en el simulador (iPhone 17 Pro) contra el feed real: crear un lugar desde
+  plantilla, elegir punto en el mapa, guardar; crear un trayecto con un extremo enlazado y
+  otro ad-hoc; tocarlo planifica y empuja `JourneyDetailView` con el tramo real; marcar
+  favorita una parada desde "Buscar" aparece de inmediato en "Favoritas" sin recargar —
+  confirma en vivo el arreglo del bug de estrella desincronizada.
+  Tests: `App/ILoveVigoRoutesTests/SavedPlacesStoreTests.swift` (plantillas no son
+  singleton, ciclo CRUD completo, `reload()` recoge mutaciones externas), ampliación de
+  `PlannerModelTests.swift` (fijar origen desde un lugar guardado usa su nombre y apaga el
+  seguimiento del GPS).
+
+- [x] **Refresco del GTFS en segundo plano.**
+  `App/ILoveVigoRoutes/BackgroundRefresh.swift` + `AppDelegate.swift` (nuevos).
+  `BGProcessingTask`, no `BGAppRefreshTask`: la importación descarga ~16 MB, descomprime,
+  parsea y escribe ~280k filas en una sola transacción — muy por encima de lo que una ventana
+  de app-refresh puede terminar. `AppDelegate` pasa a ser el único dueño de `AppEnvironment`
+  (antes vivía en `@State` de `ILoveVigoRoutesApp`) porque el registro de la tarea tiene que
+  ocurrir antes de que `didFinishLaunchingWithOptions` termine, y ese es el único punto del
+  ciclo de vida donde eso está garantizado. `handle` llama a `environment.refreshFeed()` sin
+  `force` — `GTFSFeedService.shouldCheck` ya tiene la política correcta para una ejecución
+  oportunista — y reprograma siempre al terminar. El `refreshFeed()` de arranque en frío se
+  mantiene como red de seguridad: iOS puede no llegar a ejecutar nunca la tarea de fondo.
+  Cubre solo el feed GTFS; los endpoints de tiempo real siguen sin sondearse nunca en segundo
+  plano, por diseño.
+  Verificado en el simulador vía `log show`: `BGTaskScheduler` registra y envía
+  `BGProcessingTaskRequest` con el identificador, `requiresNetworkConnectivity=1` y
+  `requiresExternalPower=0` correctos — un identificador no declarado en
+  `BGTaskSchedulerPermittedIdentifiers` habría hecho crashear la app al registrar, y no
+  crasheó.
+
+**Fase 4, parcial.** CRUD de lugares y trayectos guardados, estrella de favorito unificada,
+orden de pestañas y refresco en segundo plano — hechos y verificados. Widget de WidgetKit,
+atajos de Siri y accesibilidad exhaustiva quedan fuera por decisión del propietario.
+
 ## Verificación rápida del estado
 
 ```bash
@@ -290,8 +396,9 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **170 tests de `VigoCore` en verde** (164 antes de este cambio;
-+5 en `JourneyAlternativesTests`, +1 en `JourneyReconstructionTests`), incluida la suite del
-feed real con `VIGO_GTFS_ZIP` apuntando al archivo publicado, y **12 tests del target de app**
-(`AddressSearchModelTests` + `PlannerModelTests`). Falta la comprobación a mano en dispositivo
-del seguimiento en movimiento, que no se puede hacer desde aquí.
+Al escribir este documento: **194 tests de `VigoCore` en verde** (170 antes de la Fase 4; +19
+en `SavedPlacesTests`, +3 en `MigrationTests`, +2 en `RepositoryTests`), incluida la suite del
+feed real con `VIGO_GTFS_ZIP` apuntando al archivo publicado, y **23 tests del target de app**
+(12 antes de la Fase 4; +5 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en
+`PlannerModelTests`). Falta la comprobación a mano en dispositivo del seguimiento en
+movimiento, que no se puede hacer desde aquí.

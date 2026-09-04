@@ -31,5 +31,13 @@
     <!-- The GTFS archive and the realtime endpoints are plain HTTP-free, but the legacy
          InfoBus fallback at infobus.vitrasa.es is HTTP-only. It is not used by the app
          today, so no ATS exception is declared. -->
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>dev.threedots.ILoveVigoRoutes.refreshFeed</string>
+    </array>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>processing</string>
+    </array>
 </dict>
 </plist>

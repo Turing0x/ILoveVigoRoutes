@@ -3,17 +3,20 @@ import VigoCore
 
 @main
 struct ILoveVigoRoutesApp: App {
-    @State private var environment = AppEnvironment()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(environment)
+                .environment(appDelegate.environment)
                 .task {
-                    // On a cold start the feed is checked once. There is no background
-                    // polling of any kind: these are unofficial public endpoints and the
-                    // brief is explicit about not hammering them.
-                    await environment.refreshFeed()
+                    // On a cold start the feed is always checked — this is the correctness
+                    // backstop, since `BackgroundRefresh`'s opportunistic run may never fire
+                    // (iOS is free to skip it entirely). Covers only the GTFS feed; the
+                    // unofficial realtime endpoints are still never polled in the
+                    // background, by design.
+                    await appDelegate.environment.refreshFeed()
+                    BackgroundRefresh.schedule()
                 }
         }
     }

@@ -10,7 +10,6 @@ final class StopDetailModel {
     private(set) var result: StopArrivals?
     private(set) var isLoading = false
     private(set) var lastAttempt: Date?
-    var isFavourite = false
     /// Lines serving this stop according to the timetable, used to show what is missing
     /// from a realtime answer rather than silently dropping it.
     private(set) var timetableLines: [String] = []
@@ -24,7 +23,6 @@ final class StopDetailModel {
     init(stop: Stop, environment: AppEnvironment) {
         self.stop = stop
         self.environment = environment
-        self.isFavourite = (try? environment.repository.isFavourite(stop.id)) ?? false
         self.timetableLines = (try? environment.repository.routeShortNames(stopID: stop.id)) ?? []
     }
 
@@ -35,8 +33,9 @@ final class StopDetailModel {
         result = await environment.arrivals.arrivals(for: stop)
     }
 
-    /// Polls only while the view is on screen. There is no background refresh anywhere in
-    /// this app by design.
+    /// Polls only while the view is on screen. Realtime arrivals are never polled in the
+    /// background — only the GTFS feed is, via `BackgroundRefresh`; these unofficial
+    /// endpoints stay cold-start/foreground-only by design.
     func startAutoRefresh() {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
@@ -53,11 +52,6 @@ final class StopDetailModel {
     func stopAutoRefresh() {
         refreshTask?.cancel()
         refreshTask = nil
-    }
-
-    func toggleFavourite() {
-        isFavourite.toggle()
-        try? environment.repository.setFavourite(stop.id, isFavourite)
     }
 
     /// Timetable departures for lines the realtime answer did not mention.
@@ -104,12 +98,7 @@ struct StopDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    model.toggleFavourite()
-                } label: {
-                    Image(systemName: model.isFavourite ? "star.fill" : "star")
-                }
-                .accessibilityLabel(model.isFavourite ? "Quitar de favoritos" : "Añadir a favoritos")
+                FavouriteStarButton(stop: model.stop)
             }
         }
         .refreshable { await model.load(forceNetwork: true) }
