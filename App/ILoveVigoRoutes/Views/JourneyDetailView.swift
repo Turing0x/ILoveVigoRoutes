@@ -20,12 +20,7 @@ struct JourneyDetailView: View {
     /// here, and only for this one boarding: the rest of the journey is still the
     /// timetable, and saying otherwise would be a promise the realtime source cannot keep.
     private var firstRide: (routeShortName: String, board: Stop, departure: Date)? {
-        for leg in journey.legs {
-            if case .ride(_, let routeShortName, _, _, let board, _, let departure, _, _) = leg {
-                return (routeShortName, board, departure)
-            }
-        }
-        return nil
+        FirstBoardingMatch.firstRide(of: journey)
     }
 
     var body: some View {
@@ -99,28 +94,15 @@ struct JourneyDetailView: View {
 
     /// Matches the first ride against the realtime feed for its boarding stop.
     ///
-    /// The realtime API has no notion of "this specific scheduled trip" — only a line, a
-    /// destination, and a countdown from now — so the match is heuristic: same line,
-    /// implied absolute time closest to the one this leg already committed to, and only
-    /// accepted within 15 minutes of it. Outside that window this is almost certainly a
-    /// different vehicle on the same line, and showing it would be worse than showing
-    /// nothing. A future-dated query (anything but "ahora") never matches, which is
-    /// correct: the realtime feed only ever knows about buses already close to arriving.
+    /// The heuristic itself now lives in `FirstBoardingMatch` (VigoCore), where it is tested
+    /// and where the route list reads it too — two copies of a rule like this drift, exactly
+    /// as the two copies of `PlanOutcome`'s wording had already drifted before Fase 5.
     private func loadLiveFirstBoarding() async {
         guard let firstRide else { return }
-        let normalizedLine = TextNormalization.normalizedLineName(firstRide.routeShortName)
         let now = Date()
         let result = await environment.arrivals.arrivals(for: firstRide.board, now: now)
-
-        let closest = result.arrivals
-            .filter { $0.normalizedLine == normalizedLine }
-            .min { a, b in
-                abs(now.addingTimeInterval(TimeInterval(a.minutes * 60)).timeIntervalSince(firstRide.departure))
-                    < abs(now.addingTimeInterval(TimeInterval(b.minutes * 60)).timeIntervalSince(firstRide.departure))
-            }
-        guard let closest else { return }
-        let impliedArrival = now.addingTimeInterval(TimeInterval(closest.minutes * 60))
-        guard abs(impliedArrival.timeIntervalSince(firstRide.departure)) <= 15 * 60 else { return }
-        liveFirstBoarding = closest
+        liveFirstBoarding = FirstBoardingMatch.match(
+            arrivals: result.arrivals, routeShortName: firstRide.routeShortName,
+            scheduledDeparture: firstRide.departure, now: now)
     }
 }

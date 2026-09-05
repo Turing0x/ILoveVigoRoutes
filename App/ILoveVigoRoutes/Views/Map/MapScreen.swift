@@ -21,6 +21,7 @@ struct MapScreen: View {
         center: LocationProvider.vigoCentre,
         span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)))
     @State private var selection: MapSelection<StopID>?
+    @State private var live: FirstBoardingLive?
     /// Where the finger is, updated by a simultaneous drag that never consumes the gesture.
     /// `LongPressGesture` cannot report a location on its own; this is the recipe the Fase 5
     /// spike confirmed on device, panning and zooming intact.
@@ -49,6 +50,9 @@ struct MapScreen: View {
                 model = MapScreenModel(repository: environment.repository,
                                        planner: environment.planner)
             }
+            if live == nil {
+                live = FirstBoardingLive(arrivals: environment.arrivals)
+            }
             model?.loadStops()
             location.requestPermissionIfNeeded()
             location.start()
@@ -63,7 +67,10 @@ struct MapScreen: View {
         .onChange(of: currentCoordinate) { _, new in
             if let new { model?.updateCurrentLocation(new) }
         }
-        .onDisappear { location.stop() }
+        .onDisappear {
+            location.stop()
+            live?.cancel()
+        }
         .onChange(of: environment.feedStatus.importedAt) { model?.loadStops() }
     }
 
@@ -145,6 +152,10 @@ struct MapScreen: View {
             // Framing follows the answer, not the question: as soon as there are routes, the
             // camera opens on all of them rather than staying on the destination pin.
             .onChange(of: model.state.route.journeys) { _, journeys in
+                // Realtime is asked for once per result, and only for what is on screen.
+                // Never in the background: these endpoints are unofficial, and §8 of the
+                // handoff makes not polling them an obligation rather than a nicety.
+                live?.refresh(for: journeys)
                 guard !journeys.isEmpty else { return }
                 frame(journeys: journeys, traces: model.traces)
             }
@@ -188,6 +199,7 @@ struct MapScreen: View {
             MapRouteSheet(
                 state: model.state,
                 failure: model.planningFailure,
+                live: { live?.match(for: $0) },
                 onPick: { role, place in
                     Task {
                         switch role {

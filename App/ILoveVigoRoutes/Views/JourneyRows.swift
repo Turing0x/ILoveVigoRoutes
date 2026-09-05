@@ -6,6 +6,13 @@ import VigoCore
 /// journey reads before anyone taps into it.
 struct JourneyAlternativeRow: View {
     let journey: Journey
+    /// The realtime arrival believed to be this journey's first bus, when there is one.
+    ///
+    /// Optional, and absent by default, because most of the time there is nothing honest to
+    /// say: a query for another day never matches, and neither does a line the source is not
+    /// reporting. When it is `nil` the row shows **nothing** rather than a timetable time
+    /// wearing a live badge.
+    var live: Arrival? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -22,9 +29,17 @@ struct JourneyAlternativeRow: View {
                     legChip(leg)
                 }
             }
-            Text(transfersText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(transfersText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let live {
+                    DataKindBadge(kind: live.confidence.hasTrackedVehicle ? .tracked : .estimated,
+                                  compact: true)
+                    Text("sale \(WaitTime(minutes: live.minutes).inlineText)")
+                        .font(.caption2.monospacedDigit())
+                }
+            }
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)

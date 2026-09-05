@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 7/11 pasos. Buscar, seleccionar y planificar, todo en el mapa |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 8/11 pasos. Con tiempo real en las alternativas |
 
 ---
 
@@ -816,6 +816,57 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   ruta; y cerrar la hoja arrastrándola hacia abajo desde **cada** uno de los modos —búsqueda,
   ficha y ruta— que es donde estaba el primero de los dos errores.
 
+- [x] **7/11 — Tiempo real en las alternativas**
+  `VigoCore/Sources/VigoCore/Planner/FirstBoardingMatch.swift` (nuevo);
+  `App/ILoveVigoRoutes/Views/FirstBoardingLive.swift` (nuevo), `JourneyRows.swift`,
+  `JourneyDetailView.swift`, `MapRouteSheet.swift` y `MapScreen.swift` modificados.
+  Tests: `FirstBoardingMatchTests.swift` (7).
+
+  Es lo que separa la app de un horario impreso, y lo que enseñan las capturas de referencia
+  del propietario ("programado a las 22:41 desde Cno. Ronda 82", "dentro de 8, 16 min").
+
+  **La heurística sale de `JourneyDetailView` a `VigoCore`.** Era un método privado de una
+  vista; ahora la lista de rutas necesita la misma respuesta para hasta cuatro alternativas, y
+  dos copias de una regla así derivan — exactamente como ya habían derivado las dos copias de
+  los textos de `PlanOutcome` antes del paso 2. Al mudarse queda probada por primera vez.
+
+  Lo que la heurística admite de sí misma, ahora escrito y con tests: la API de tiempo real
+  **no tiene noción de "este viaje concreto"** —contesta línea, destino y cuenta atrás, y nada
+  de eso se puede unir a un `trip_id` del GTFS—, así que el cruce es misma línea más la hora
+  implícita más cercana a la salida que el planificador ya fijó, **y solo dentro de 15
+  minutos**. Ese límite es lo que impide confundir el autobús que se busca con el siguiente de
+  la misma línea, y hay un test en cada lado del borde.
+
+  **Una consulta a fecha futura nunca casa**, que con este feed de siete días es el caso más
+  frecuente en la práctica. Es lo correcto: el tiempo real no sabe nada de un autobús que aún
+  no está por llegar, y cuando no hay coincidencia la fila no muestra **nada** — nunca una
+  hora de horario con insignia de "en vivo".
+
+  **Una petición por parada de embarque distinta, no por alternativa.** Cuatro alternativas
+  salen a menudo del mismo poste, y el §8 del handoff convierte en obligación —no en detalle—
+  no disparar cuatro peticiones idénticas contra unos endpoints que no tienen API oficial.
+  `ThrottledRealtimeProvider` ya impone 20 s por debajo, así que agrupar aquí es no preguntar
+  siquiera. Y sigue sin sondearse nunca en segundo plano: solo se pide con algo en pantalla
+  que lo esté pidiendo, igual que hace `StopDetailModel`.
+
+  El tiempo real **anota y nunca decide**: nada de esto vuelve a `RaptorEngine`. Se decidió en
+  la Fase 3 y no se ha tocado.
+
+  **Verificado por mutación, seis veces:** (1) sin límite de tolerancia; (2) sin filtrar por
+  línea; (3) comparando la línea en crudo en vez de normalizada; (4) cogiendo la primera
+  llegada en vez de la más cercana; (5) la distancia ignorando los minutos de la llegada;
+  (6) `firstRide` devolviendo el último tramo en bus en vez del primero. Las seis tumban
+  tests — la (6) tras reescribirla, porque la primera versión de esa mutación ni siquiera
+  compilaba.
+
+  Suite de `VigoCore`: **255 tests en verde** (+7). Debug y Release compilan.
+
+  **Pendiente de comprobar en dispositivo:** con una consulta "ahora" y dentro de la ventana
+  del feed, que alguna alternativa muestre "sale en N min" con su insignia de procedencia; que
+  las que no casan no muestren nada en absoluto; y que el detalle del trayecto siga anotando
+  igual que antes de este paso.
+
+
 
 
 
@@ -829,10 +880,10 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **248 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +54 en la
+Al escribir este documento: **255 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +61 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
-`MapPlaceLabelsTests` y `CoordinateBoundsTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+`MapPlaceLabelsTests`, `CoordinateBoundsTests` y `FirstBoardingMatchTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
 

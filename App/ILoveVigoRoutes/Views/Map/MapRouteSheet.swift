@@ -10,6 +10,8 @@ import VigoCore
 struct MapRouteSheet: View {
     let state: MapNavigationState
     let failure: String?
+    /// Live first-boarding annotations, keyed by journey. Empty is the normal case.
+    let live: (Journey) -> Arrival?
     let onPick: (PlacePickerRole, MapPlace) -> Void
     let onSwap: () -> Void
     let onDeparture: (MapNavigationState.Departure) -> Void
@@ -155,7 +157,7 @@ struct MapRouteSheet: View {
                         if index == state.selectedAlternative { onOpen() } else { onSelect(index) }
                     } label: {
                         HStack(spacing: 10) {
-                            JourneyAlternativeRow(journey: journey)
+                            JourneyAlternativeRow(journey: journey, live: live(journey))
                             if index == state.selectedAlternative {
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
