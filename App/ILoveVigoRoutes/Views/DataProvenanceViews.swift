@@ -225,12 +225,6 @@ struct StaleFeedBanner: View {
     }
 }
 
-extension ServiceDate {
-    var humanReadable: String {
-        String(format: "%02d/%02d/%04d", day, month, year)
-    }
-}
-
 extension Color {
     /// Parses the `RRGGBB` values the feed uses in `route_color`.
     init?(hex: String?) {

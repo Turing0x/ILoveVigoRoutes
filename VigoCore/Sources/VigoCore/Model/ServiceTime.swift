@@ -121,3 +121,12 @@ public struct ServiceDate: Hashable, Sendable, Codable, Comparable, CustomString
         var c = encoder.singleValueContainer(); try c.encode(yyyymmdd)
     }
 }
+
+extension ServiceDate {
+    /// `DD/MM/YYYY`. Lives here rather than in the app because `PlanOutcomeMessage` needs it
+    /// to say which days the feed actually covers, and a seven-day window is useless
+    /// information without its dates.
+    public var humanReadable: String {
+        String(format: "%02d/%02d/%04d", day, month, year)
+    }
+}

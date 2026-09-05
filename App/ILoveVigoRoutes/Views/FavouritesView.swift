@@ -79,25 +79,18 @@ final class SavedJourneyPlanModel {
             let result = try await planner.plan(journey.query)
             switch result.outcome {
             case .journeys(let alternatives):
+                // Una lista vacía no es un éxito sin nada dentro: es el mismo "no hay
+                // ninguna" que `noJourneyFound`, y así lo dice.
                 if let best = alternatives.first {
                     resultJourney = best
                 } else {
-                    failureMessage = "No he encontrado ninguna ruta ahora mismo."
+                    failureMessage = PlanOutcomeMessage.failure(
+                        .noJourneyFound(horizon: 0), context: .savedJourney)
                 }
             case .walkOnly(let journey):
                 resultJourney = journey
-            case .noStopsNearOrigin(let radius):
-                failureMessage = "No hay ninguna parada a menos de \(Int(radius)) m del origen guardado."
-            case .noStopsNearDestination(let radius):
-                failureMessage = "No hay ninguna parada a menos de \(Int(radius)) m del destino guardado."
-            case .outsideFeedWindow:
-                failureMessage = "No tengo datos para hoy: los horarios importados no cubren esta fecha."
-            case .noServiceOnDay:
-                failureMessage = "No hay servicio programado hoy en este trayecto."
-            case .noJourneyFound:
-                failureMessage = "No he encontrado ninguna ruta en las próximas horas."
-            case .noData:
-                failureMessage = "Todavía no se han importado los datos del Concello."
+            default:
+                failureMessage = PlanOutcomeMessage.failure(result.outcome, context: .savedJourney)
             }
         } catch {
             failureMessage = (error as? CustomStringConvertible)?.description ?? error.localizedDescription

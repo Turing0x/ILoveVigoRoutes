@@ -233,40 +233,14 @@ struct PlannerView: View {
             } header: {
                 Text("A pie")
             } footer: {
-                Text("Caminar es más rápido que cualquier autobús disponible ahora mismo.")
+                Text(PlanOutcomeMessage.walkOnlyExplanation)
             }
 
-        case .noStopsNearOrigin(let radius):
-            Section {
-                Text("No hay ninguna parada a menos de \(Int(radius)) m del origen.")
-            }
-
-        case .noStopsNearDestination(let radius):
-            Section {
-                Text("No hay ninguna parada a menos de \(Int(radius)) m del destino.")
-            }
-
-        case .outsideFeedWindow(let window):
-            Section {
-                Text("""
-                    No tengo datos para ese día. Los horarios importados cubren del \
-                    \(window.lowerBound.humanReadable) al \(window.upperBound.humanReadable).
-                    """)
-            }
-
-        case .noServiceOnDay(let day):
-            Section {
-                Text("No hay servicio programado el \(day.humanReadable).")
-            }
-
-        case .noJourneyFound(let horizon):
-            Section {
-                Text("No he encontrado ninguna ruta en las próximas \(Int(horizon / 3_600)) horas.")
-            }
-
-        case .noData:
-            Section {
-                Text("Todavía no se han importado los datos del Concello.")
+        default:
+            // Los siete casos restantes son fallos, y su texto lo decide
+            // `PlanOutcomeMessage` — el mismo que usan los trayectos guardados y el mapa.
+            if let message = PlanOutcomeMessage.failure(outcome) {
+                Section { Text(message) }
             }
         }
     }

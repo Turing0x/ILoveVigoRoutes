@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 2/11 pasos (sonda + máquina de estados) |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 3/11 pasos (sonda, máquina de estados, mensajes) |
 
 ---
 
@@ -517,6 +517,50 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   Suite de `VigoCore`: **211 tests en verde** (194 antes de la Fase 5, +17). Target de app sin
   cambios; Debug y Release compilan contra `generic/platform=iOS`.
 
+- [x] **2/11 — `PlanOutcomeMessage`: una sola traducción de los ocho casos**
+  `VigoCore/Sources/VigoCore/Planner/PlanOutcomeMessage.swift` (nuevo),
+  `Model/ServiceTime.swift` (gana `ServiceDate.humanReadable`);
+  `App/ILoveVigoRoutes/Views/PlannerView.swift` y `FavouritesView.swift` pasan a usarlo,
+  `DataProvenanceViews.swift` pierde su copia de `humanReadable`.
+  Tests: `PlanOutcomeMessageTests.swift` (10).
+
+  Hecho **antes** de la UI del mapa a propósito: es refactor puro sobre código ya verificado,
+  y hacerlo después habría significado escribir la tercera copia para luego borrarla.
+
+  **No era solo duplicación: las dos copias ya habían divergido, y la peor perdía datos.**
+  `SavedJourneyPlanModel` decía *"los horarios importados no cubren esta fecha"* **sin las
+  fechas**, y *"no hay ninguna parada cerca del origen guardado"* **sin el radio**. Con un
+  feed que solo cubre siete días, las fechas de cobertura son lo único con lo que el usuario
+  puede hacer algo; el radio, igual. Unificar arregla esa regresión de camino, y hay un test
+  dedicado a cada una de las dos para que no vuelva.
+
+  Detalles con su razón:
+  - `failure(_:context:)` devuelve **`nil`** para `.journeys` y `.walkOnly`. Es parte del
+    contrato, no un descuido: son respuestas, no fallos, y quien pintara ese texto sin
+    comprobarlo estaría disculpándose por una búsqueda que salió bien.
+  - `context` solo cambia dos mensajes (`origen`/`origen guardado`), porque en un trayecto
+    guardado el arreglo es editar el trayecto, no la consulta de ahora. Descartada la idea de
+    que el contexto matizara también `outsideFeedWindow`: las fechas sirven igual en los tres
+    sitios y la maquinaria extra no pagaba.
+  - Horizonte de **cero segundos** → "ahora mismo", nunca "en las próximas 0 horas". No es
+    hipotético: `MapNavigationState.planningFinished` pliega una lista vacía de alternativas
+    a `noJourneyFound(horizon: 0)`, así que los pasos 1 y 2 se tocan justo ahí. Hay un test
+    que los cruza, además del que prueba cada uno por su lado.
+  - `ServiceDate.humanReadable` sube a `VigoCore` porque este mensaje lo necesita. Elimina el
+    duplicado que vivía en la app; los cuatro usos que ya existían siguen igual.
+
+  Vive en `VigoCore/Planner/`, junto al tipo que describe, y no en el target de app: es una
+  función pura de un `PlanOutcome`, así que `swift test` la cubre en el Mac sin simulador.
+
+  **Verificado por mutación, seis veces:** (1) un éxito devolviendo texto de fallo;
+  (2) `outsideFeedWindow` sin las fechas; (3) sin el caso de horizonte cero; (4) el contexto
+  ignorado; (5) el radio fuera del mensaje; (6) `humanReadable` sin relleno de ceros. Las seis
+  tumban tests.
+
+  Suite de `VigoCore`: **221 tests en verde** (+10). El target de app compila en Debug y
+  Release contra `generic/platform=iOS`.
+
+
 
 ## Verificación rápida del estado
 
@@ -525,9 +569,9 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **211 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +17 en la
-Fase 5 en `MapNavigationStateTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+Al escribir este documento: **221 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +27 en la
+Fase 5 entre `MapNavigationStateTests` y `PlanOutcomeMessageTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
 
