@@ -38,7 +38,7 @@ struct SavedPlaceEditorView: View {
     enum Mode {
         case create
         /// Shortcut from "Guardar como lugar…" on a stop row or a resolved address in
-        /// `PlacePickerView`: the anchor is already known, only the name is missing.
+        /// `MapSearchSheet`: the anchor is already known, only the name is missing.
         case createFrom(Place)
         case edit(SavedPlace)
     }
@@ -165,10 +165,14 @@ struct SavedPlaceEditorView: View {
                 }
             }
             .sheet(isPresented: $pickingAnchor) {
-                PlacePickerView(title: "Punto del lugar") { picked in
-                    anchorInput = Self.input(for: picked.place)
-                    anchorSummary = picked.place.label
-                }
+                MapSearchSheet(purpose: .standalone(title: "Punto del lugar"),
+                               onPick: { place in
+                                   anchorInput = Self.input(for: place.place)
+                                   anchorSummary = place.label
+                                   pickingAnchor = false
+                               },
+                               onPickJourney: { _ in },
+                               onCancel: { pickingAnchor = false })
             }
         }
     }

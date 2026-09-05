@@ -142,7 +142,7 @@ struct SavedJourneyEditorView: View {
 }
 
 /// Picks one journey endpoint: a saved place (a live link, so a later rename propagates) or
-/// anything `PlacePickerView` can find, taken as a detached, one-off snapshot.
+/// anything `MapSearchSheet` can find, taken as a detached, one-off snapshot.
 private struct EndpointPickerSheet: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.dismiss) private var dismiss
@@ -183,15 +183,14 @@ private struct EndpointPickerSheet: View {
             }
         }
         .sheet(isPresented: $showingPlacePicker) {
-            PlacePickerView(title: title) { picked in
-                let anchor: SavedPlaceAnchorInput
-                switch picked.place {
-                case .stop(let stop): anchor = .stop(stop)
-                case .coordinate(let coordinate, _): anchor = .coordinate(coordinate)
-                }
-                onPick(.adHoc(name: picked.place.label, anchor: anchor), picked.place.label)
-                dismiss()
-            }
+            MapSearchSheet(purpose: .standalone(title: title),
+                           onPick: { place in
+                               onPick(place.savedEndpointInput, place.label)
+                               showingPlacePicker = false
+                               dismiss()
+                           },
+                           onPickJourney: { _ in },
+                           onCancel: { showingPlacePicker = false })
         }
     }
 }
