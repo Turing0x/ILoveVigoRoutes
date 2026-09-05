@@ -50,6 +50,8 @@ struct MapSearchSheet: View {
     @State private var location = LocationProvider()
     @State private var showingMapPicker = false
     @State private var savingPlaceFrom: Place?
+    @State private var nearby: [NearbyStop] = []
+    @State private var lines: [Route] = []
 
     var body: some View {
         NavigationStack {
@@ -81,6 +83,21 @@ struct MapSearchSheet: View {
             if addresses == nil { addresses = AddressSearchModel(service: environment.addressSearch) }
             location.requestPermissionIfNeeded()
             location.start()
+        }
+        .task {
+            let repository = environment.repository
+            lines = await Task.detached(priority: .userInitiated) {
+                (try? repository.routesWithService()) ?? []
+            }.value
+        }
+        .task(id: roundedCoordinate) {
+            guard let coordinate = location.coordinate else { return }
+            let repository = environment.repository
+            nearby = await Task.detached(priority: .userInitiated) {
+                (try? repository.nearbyStops(latitude: coordinate.latitude,
+                                             longitude: coordinate.longitude,
+                                             radiusMetres: 800, limit: 8)) ?? []
+            }.value
         }
         .onDisappear {
             addresses?.cancel()
@@ -151,6 +168,17 @@ struct MapSearchSheet: View {
                                          longitude: coordinate.longitude)))
     }
 
+    /// `location.coordinate` moves with every GPS fix; rounding to four decimals (roughly
+    /// 11 m) before using it as a `.task(id:)` is what keeps "Cerca de ti" from reissuing
+    /// its query on jitter alone. The task itself still reads the live coordinate, so the
+    /// query is never stale — only *how often* it reruns is throttled here.
+    private var roundedCoordinate: Coordinate? {
+        location.coordinate.map {
+            Coordinate(latitude: ($0.latitude * 1e4).rounded() / 1e4,
+                      longitude: ($0.longitude * 1e4).rounded() / 1e4)
+        }
+    }
+
     // MARK: - Con el campo vacío
 
     /// A saved journey is either planned whole (`.explore`) or contributes one end
@@ -204,6 +232,18 @@ struct MapSearchSheet: View {
             }
         }
 
+        if !nearby.isEmpty {
+            Section("Cerca de ti") {
+                ForEach(nearby) { nearbyRow($0) }
+            }
+        }
+
+        if !lines.isEmpty {
+            Section("Líneas con servicio") {
+                ForEach(lines) { lineRow($0) }
+            }
+        }
+
         if (!showsSavedJourneys || environment.savedPlaces.journeys.isEmpty),
            environment.savedPlaces.places.isEmpty,
            environment.favourites.stops.isEmpty {
@@ -215,11 +255,28 @@ struct MapSearchSheet: View {
 
     // MARK: - Resultados
 
+    /// Lines matching the query by short or long name — "15" now finds línea 15, not just
+    /// paradas whose stop code happens to contain it.
+    private var matchingLines: [Route] {
+        let folded = TextNormalization.searchFolded(query)
+        guard !folded.isEmpty else { return [] }
+        return lines.filter {
+            TextNormalization.searchFolded($0.shortName).contains(folded)
+                || TextNormalization.searchFolded($0.longName).contains(folded)
+        }
+    }
+
     @ViewBuilder
     private var searchResults: some View {
         if !results.isEmpty {
             Section("Paradas") {
                 ForEach(results) { stop in stopRow(stop) }
+            }
+        }
+
+        if !matchingLines.isEmpty {
+            Section("Líneas") {
+                ForEach(matchingLines) { lineRow($0) }
             }
         }
 
@@ -248,7 +305,8 @@ struct MapSearchSheet: View {
             Text("Las direcciones las busca Apple Mapas. Tu ubicación no se envía: la búsqueda siempre se centra en Vigo.")
         }
 
-        if results.isEmpty, addresses?.suggestions.isEmpty ?? true, addresses?.isSearching != true {
+        if results.isEmpty, matchingLines.isEmpty,
+           addresses?.suggestions.isEmpty ?? true, addresses?.isSearching != true {
             ContentUnavailableView.search(text: query)
         }
     }
@@ -322,6 +380,51 @@ struct MapSearchSheet: View {
 
     private func pick(_ place: MapPlace) {
         onPick(place)
+    }
+
+    /// A stop ordered by straight-line distance — fixed 800 m radius, up to 8 results. No
+    /// radio picker: that made sense as a whole screen, not as one section of a sheet.
+    private func nearbyRow(_ nearby: NearbyStop) -> some View {
+        Button {
+            pick(.stop(nearby.stop))
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(nearby.stop.name).font(.subheadline).lineLimit(2)
+                    if !nearby.routeShortNames.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 5) {
+                                ForEach(nearby.routeShortNames, id: \.self) { LineBadge(name: $0) }
+                            }
+                        }
+                        .scrollClipDisabled()
+                    }
+                }
+                Spacer(minLength: 4)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(distanceText(nearby.distanceMetres))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                    Text("en línea recta").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .favouriteActions(for: nearby.stop)
+    }
+
+    private func distanceText(_ metres: Double) -> String {
+        metres < 1000 ? "\(Int(metres.rounded())) m"
+                      : String(format: "%.1f km", metres / 1000)
+    }
+
+    /// Not interactive: there is no query to filter stops by línea, so tapping one would
+    /// have nowhere honest to go.
+    private func lineRow(_ route: Route) -> some View {
+        HStack(spacing: 10) {
+            LineBadge(name: route.shortName, colorHex: route.colorHex,
+                     textColorHex: route.textColorHex)
+            Text(route.longName).font(.subheadline).lineLimit(2)
+        }
     }
 }
 
