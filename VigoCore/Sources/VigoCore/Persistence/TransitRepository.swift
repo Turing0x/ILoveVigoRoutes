@@ -68,6 +68,24 @@ public struct FeedStatus: Sendable, Hashable {
         return date > window.upperBound
     }
 
+    /// Every day the feed can actually answer for, in order. Empty when nothing is imported.
+    ///
+    /// What a day picker is allowed to offer. "Seven days from today" is the wrong list and
+    /// not hypothetically so: a feed downloaded on 2026-09-04 reported a window of
+    /// 20260905–20260911, which *starts tomorrow* — so even "today" can sit outside it. A
+    /// picker built from the clock would offer days that answer nothing, with no explanation.
+    public func serviceDays(calendar: Calendar) -> [ServiceDate] {
+        guard let window else { return [] }
+        var days: [ServiceDate] = []
+        var day = window.lowerBound
+        while day <= window.upperBound {
+            days.append(day)
+            guard let next = day.adding(days: 1, calendar: calendar) else { break }
+            day = next
+        }
+        return days
+    }
+
     public func daysRemaining(from date: ServiceDate, calendar: Calendar) -> Int? {
         guard let window,
               let from = date.startOfDay(in: calendar),
@@ -352,6 +370,78 @@ public struct TransitRepository: Sendable {
                 }
             }
             return results.sorted { $0.absoluteDate < $1.absoluteDate }.prefix(limit).map { $0 }
+        }
+    }
+
+    /// Every timetabled departure of one route from one stop, on one calendar day.
+    ///
+    /// The sibling of `scheduledDepartures(stopID:from:horizon:limit:)`, which answers "what is
+    /// coming soon" — all routes, three hours, thirty rows. This one answers "when does this
+    /// line pass here", which is a different question and needs the whole day: a busy Vitrasa
+    /// line is 60–80 rows, so there is no cap to apply.
+    ///
+    /// **A calendar day, not a service day, and the two are not the same.** A trip departing at
+    /// `25:10:00` belongs to the *previous* service day but happens at 01:10 on this one, and
+    /// somebody reading a timetable expects to find it under the day they will be standing at
+    /// the stop. So both service days are asked, and each row is placed by the instant it
+    /// actually happens. Asking only the day named would silently lose every early-morning
+    /// departure of the night lines.
+    ///
+    /// The bounds come from real midnights rather than from adding 86 400, for the reason
+    /// `TimetableBuilder` already documents: twice a year the offset between two midnights is
+    /// not a day.
+    public func scheduledDepartures(
+        stopID: StopID, routeID: RouteID, on serviceDate: ServiceDate
+    ) throws -> [ScheduledDeparture] {
+        guard let dayStart = serviceDate.startOfDay(in: calendar),
+              let nextDay = serviceDate.adding(days: 1, calendar: calendar),
+              let dayEnd = nextDay.startOfDay(in: calendar),
+              let previousDay = serviceDate.adding(days: -1, calendar: calendar)
+        else { return [] }
+
+        return try database.writer.read { db in
+            var results: [ScheduledDeparture] = []
+            for serviceDay in [previousDay, serviceDate] {
+                guard let midnight = serviceDay.startOfDay(in: calendar) else { continue }
+                let lowerBound = Int(dayStart.timeIntervalSince(midnight))
+                let upperBound = Int(dayEnd.timeIntervalSince(midnight))
+
+                let services = try Self.activeServiceIDs(db, serviceDay, calendar)
+                guard !services.isEmpty else { continue }
+                let placeholders = databaseQuestionMarks(count: services.count)
+
+                var arguments: [any DatabaseValueConvertible] = [
+                    stopID.rawValue, routeID.rawValue, lowerBound, upperBound
+                ]
+                arguments.append(contentsOf: services.map(\.rawValue))
+
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT st.tripID AS tripID, st.departure AS departure,
+                           t.routeID AS routeID, t.headsign AS headsign,
+                           r.shortName AS shortName, r.longName AS longName
+                    FROM stopTime st
+                    JOIN trip t ON t.id = st.tripID
+                    JOIN route r ON r.id = t.routeID
+                    WHERE st.stopID = ? AND t.routeID = ?
+                      AND st.departure >= ? AND st.departure < ?
+                      AND t.serviceID IN (\(placeholders))
+                    ORDER BY st.departure
+                    """, arguments: StatementArguments(arguments))
+
+                for row in rows {
+                    let seconds: Int = row["departure"]
+                    results.append(ScheduledDeparture(
+                        tripID: TripID(row["tripID"] as String),
+                        routeID: RouteID(row["routeID"] as String),
+                        routeShortName: row["shortName"] as String,
+                        routeLongName: row["longName"] as String,
+                        headsign: row["headsign"] as String?,
+                        departure: ServiceTime(seconds: seconds),
+                        serviceDate: serviceDay,
+                        absoluteDate: midnight.addingTimeInterval(TimeInterval(seconds))))
+                }
+            }
+            return results.sorted { $0.absoluteDate < $1.absoluteDate }
         }
     }
 
