@@ -16,6 +16,8 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
 | **Fase 5 — El mapa como planificador** | ✅ Completa y comprobada en dispositivo |
 | **Fase 6 — Retirada de lo viejo** | ✅ Hecha. Pendiente de comprobación en dispositivo |
+| **Fase 7 — Un solo buscador, dos pestañas** | ✅ Hecha y fusionada a `main` |
+| **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -1098,6 +1100,119 @@ Neto: −255 líneas aproximadamente, un buscador en vez de dos, un hueco de acc
 cerrado y un bug de "Duplicar"/edición de trayectos corregido de paso. 273 tests de
 `VigoCore` sin cambios (esta fase no toca el paquete); 16 tests del target de app en verde.
 
+## Fase 8 — Las caminatas en el mapa y actualizar a mano
+
+Plan en `PLAN-FASES-8-13.md`, §Fase 8. Nace de la prueba en dispositivo del 2026-09-05, tras
+fusionar la Fase 7: tres cosas que el propietario echó en falta usando la app de verdad. No es
+funcionalidad nueva, son defectos de lo ya entregado.
+
+Ese mismo documento **renumera** las cuatro fases que ya estaban planificadas y sin escribir
+(ordenación 8→10, trayecto activo 9→11, recientes 10→12, avisos 11→13) para meter delante esta
+y la 9. Renumerar era gratis mientras ninguna estuviera anotada aquí, y dejaba de serlo en cuanto
+la primera se implementara.
+
+### Hecho
+
+- [x] **1/3 — `Journey.walkSegments` y `FirstBoardingMatch.hasDeparted`, en `VigoCore`**
+  `VigoCore/Sources/VigoCore/MapFlow/JourneyWalkSegments.swift` (nuevo),
+  `Planner/FirstBoardingMatch.swift`; tests en `JourneyWalkSegmentsTests.swift` (3) y
+  ampliación de `FirstBoardingMatchTests.swift` (2).
+
+  Las dos piezas puras de la fase, en el paquete y no en la app, por la razón de siempre desde
+  la Fase 5: ahí las cubre `swift test` en el Mac.
+
+  `hasDeparted` se mide contra el **embarque**, no contra `Journey.departure`. No son el mismo
+  instante y solo uno es el autobús: `departure` es cuándo habría que echar a andar hacia la
+  parada, anterior por toda la caminata de acceso. Compararla daría el trayecto por perdido con
+  el autobús aún sin pasar, y es exactamente la misma distinción que §10.1 del plan tiene que
+  hacer entre "sale antes" y la hora a la que se cierra la puerta.
+
+  **Verificado por mutación, cinco veces:** (1) los tramos a pie sin geometría —el defecto
+  original—; (2) `from` y `to` invertidos; (3) los de longitud cero dibujados; (4) `hasDeparted`
+  contra `departure`; (5) un trayecto solo a pie contando como salido. Las cinco tumban tests.
+
+  **Un fallo del arnés de mutación, otra vez, y distinto del de la Fase 5.** La mutación (1)
+  se dio primero por indetectada y luego por "no compila": ninguna de las dos cosas era cierta.
+  Compilaba, y el test caía con un `Fatal error: Index out of range` al indexar `segments[0]`
+  tras un `#expect` de cuenta que ya había fallado — y el arnés buscaba `error:` en la salida,
+  que un crash también imprime. Corregido en los dos lados: el arnés compila primero y solo
+  entonces distingue fallo de crash, y los dos tests pasan a usar `try #require` para la cuenta,
+  de modo que una cuenta equivocada da un test rojo en vez de reventar la suite entera. Un
+  `crash` se lee mucho peor que un fallo, y aquí además escondía qué mutación lo había causado.
+
+- [x] **2/3 — El mapa dibuja las caminatas**
+  `App/ILoveVigoRoutes/Views/JourneyTrace.swift`, `Views/Map/JourneyOverviewMapContent.swift`.
+
+  `JourneyTraceBuilder` hacía `guard case .ride(…) else { continue }`, así que **ningún** tramo a
+  pie producía geometría: el trazado del autobús flotaba sin unirse ni al pin de origen ni al de
+  destino, y un trayecto `walkOnly` —que no tiene ningún `.ride`— no dibujaba **nada**, dos
+  marcadores y un hueco entre ellos. En la lista de tramos sí salían, y siguen saliendo igual:
+  `JourneyLegRow` ya dibujaba el caso `.walk` con sus metros y minutos. El defecto era solo del
+  mapa.
+
+  Discontinuas y del mismo índigo. **Descartado `MKDirections`**: daría la acera de verdad a
+  cambio de una petición de red por tramo a pie y por alternativa —hasta ocho— con las dos
+  coordenadas saliendo del dispositivo en cada replanificación, y este proyecto solo geocodifica
+  cuando el usuario pulsa un sitio a propósito (`MapKitPlaceResolver`, Fase 5 paso 4). La recta
+  no es una aproximación vergonzante: es lo que la app ya afirma en palabras en cada tramo ("en
+  línea recta") y lo que `NearbyStop.distanceMetres` está documentado como ser. La discontinuidad
+  dice en el dibujo lo mismo que el texto; una línea continua sobre la acera equivocada sería la
+  mentira.
+
+  Solo la alternativa destacada dibuja sus caminatas — la misma regla que ya regía los marcadores
+  de parada desde la Fase 5, y aquí pesa más: los tramos de acceso de las cuatro alternativas
+  salen todos del mismo origen, en abanico.
+
+- [x] **3/3 — Actualizar a mano, edad de la respuesta y "Ya ha salido"**
+  `App/ILoveVigoRoutes/Views/Map/MapScreenModel.swift`, `Map/MapRouteSheet.swift`,
+  `Map/MapScreen.swift`, `Views/JourneyRows.swift`.
+
+  Los únicos disparadores de replanificación eran editar un extremo, intercambiarlos o cambiar la
+  hora de salida. Si se escapaba el autobús recomendado no había gesto para ver el siguiente.
+  Ahora `.refreshable` **y** botón en la barra: los dos, porque tirar hacia abajo es invisible y
+  la hoja abre en un detente donde no siempre hay recorrido para el gesto. El botón va en la
+  barra y no en la cabecera de "Alternativas" porque ahí entra el menú de ordenación de la
+  Fase 10.
+
+  **Nada se replanifica solo.** Un recálculo automático movería la lista bajo el dedo y podría
+  cambiar la alternativa destacada mientras se está leyendo. Se dice la edad de la respuesta y se
+  ofrece el gesto. La edad solo con salida "ahora": un trayecto pedido para una hora fija no
+  envejece, y fecharlo invitaría a una actualización que no puede devolver nada distinto.
+
+  "Ya ha salido" atenúa la fila pero **no la esconde**: un autobús que se ha ido sigue siendo la
+  respuesta a lo que se preguntó, y quitar filas bajo el dedo es peor que atenuarlas. En VoiceOver
+  va **delante** de la frase, no detrás de una lista de horas, y calla el tiempo real de un
+  autobús que ya no está por venir.
+
+  **El tiempo real no se fuerza.** La caché de 20 s de `ThrottledRealtimeProvider` no se saltea:
+  esos endpoints no tienen API oficial y el §8 del handoff lo convierte en obligación. Dentro de
+  la ventana se sirve lo cacheado, y ningún texto promete lo contrario.
+
+  **Arreglo de camino: el trazado ya no parpadea.** `plan()` vaciaba las trazas antes de
+  consultar y el mapa dibujaba desde `state.route.journeys`, que se vacía al empezar la consulta;
+  la ruta que se estaba mirando desaparecía durante toda la replanificación. Ahora el mapa dibuja
+  de `MapScreenModel.drawn`, un par (trayectos, trazas) con **un único escritor**, sustituido solo
+  cuando hay algo nuevo con lo que sustituirlo. Que el mapa esté en la ruta lo decide el modo, así
+  que cerrar la hoja se la sigue llevando.
+  El encuadre pasa a colgar de ese par y no del estado, y eso arregla un segundo fallo que estaba
+  ahí sin verse: colgado de `state.route.journeys` se disparaba mientras `drawn` aún tenía el
+  resultado anterior, encuadrando una ruta con la geometría de otra.
+
+**Fase 8 completa — 3 pasos.** Suite de `VigoCore`: **278 tests en verde** (+5). Target de app:
+**16 tests en verde**, sin cambios. Debug y Release compilan contra `generic/platform=iOS`.
+
+**Pendiente de comprobar en dispositivo** (lo hace el propietario):
+
+- [ ] Un trayecto con bus: se ven las dos rectas discontinuas, del origen a la parada y de la
+      bajada al destino
+- [ ] Un destino tan cerca que sale `walkOnly`: **ahora se dibuja algo**, que hoy no pasaba
+- [ ] Con cuatro alternativas, solo la destacada dibuja sus caminatas
+- [ ] Dejar pasar la hora de un autobús: la fila dice "Ya ha salido" sin tocar nada
+- [ ] Actualizar, con el botón y tirando hacia abajo: sale el siguiente y el trazado no parpadea
+- [ ] El pie dice a qué hora se calculó, y con hora fija de salida no lo dice
+- [ ] La línea discontinua se distingue de la continua a la escala a la que abre el mapa
+- [ ] El botón de actualizar no queda debajo del pulgar del gesto de arrastrar la hoja
+
 
 
 
@@ -1113,11 +1228,12 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **273 tests de `VigoCore` en verde** (170 antes de la Fase 4;
+Al escribir este documento: **278 tests de `VigoCore` en verde** (170 antes de la Fase 4;
 +24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +71 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
-`JourneySummaryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+`JourneySummaryTests`; +5 en la Fase 8 entre `JourneyWalkSegmentsTests` y la ampliación de
+`FirstBoardingMatchTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **16 tests del target de app** (eran 23 hasta que la Fase 6 se llevó
 `PlannerModelTests` con la pestaña que probaba; la cifra de 17 que este documento citaba
 después de la Fase 6 no coincide con lo que arroja `xcodebuild test` hoy — ni `PlacePickerView`

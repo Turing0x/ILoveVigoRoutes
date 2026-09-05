@@ -121,6 +121,7 @@ impida confundirlos.
 | **Fase 5** — El mapa como planificador | **Completa** |
 | **Fase 6** — Retirada de lo viejo | **Completa**: fuera la pestaña "Planificar" y el detalle de trayecto aparte |
 | **Fase 7** — Un solo buscador, dos pestañas | **Completa**: llegadas en la ficha de lugar del mapa, `PlacePickerView` eliminado en favor de `MapSearchSheet` (con "Mi ubicación", "Elegir en el mapa" y guardar en swipe), secciones "Cerca de ti" y "Líneas con servicio", y fuera las pestañas Buscar y Cercanas |
+| **Fase 8** — Caminatas en el mapa y actualizar a mano | **Completa** en código, pendiente de comprobar en dispositivo: los tramos a pie se dibujan (antes no se dibujaba ninguno, y un trayecto solo a pie no dibujaba nada), la lista de rutas se puede volver a pedir con un gesto o un botón, dice cuándo se calculó y marca "Ya ha salido" el autobús que ya se ha ido |
 
 ### Fase 5 — el mapa es el planificador
 
