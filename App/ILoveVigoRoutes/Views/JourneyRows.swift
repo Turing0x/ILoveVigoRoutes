@@ -14,6 +14,13 @@ struct JourneyAlternativeRow: View {
     /// wearing a live badge.
     var live: Arrival? = nil
 
+    /// Whether the first bus of this alternative has already left.
+    ///
+    /// Said out loud rather than left to be worked out by comparing the hour on the row with
+    /// the clock. Missing a bus is the ordinary reason a route list stops being true, and it
+    /// is the one thing the list could not previously tell anyone.
+    var hasDeparted = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -33,7 +40,11 @@ struct JourneyAlternativeRow: View {
                 Text(transfersText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                if let live {
+                if hasDeparted {
+                    Text("Ya ha salido")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                } else if let live {
                     DataKindBadge(kind: live.confidence.hasTrackedVehicle ? .tracked : .estimated,
                                   compact: true)
                     Text("sale \(WaitTime(minutes: live.minutes).inlineText)")
@@ -45,7 +56,16 @@ struct JourneyAlternativeRow: View {
         // `.combine` alone reads the stack as it happens to be laid out: two bare times, a
         // number, and a line badge that is a digit with no noun in front of it.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(JourneySummary.spoken(journey, live: live))
+        .accessibilityLabel(spokenLabel)
+    }
+
+    /// The spoken sentence, with the departed state in front of it.
+    ///
+    /// First and not appended: the fact that changes whether the rest is worth hearing at all
+    /// has to arrive before the rest, not after a list of times.
+    private var spokenLabel: String {
+        let sentence = JourneySummary.spoken(journey, live: hasDeparted ? nil : live)
+        return hasDeparted ? "Ya ha salido. " + sentence : sentence
     }
 
     private var durationText: String {
