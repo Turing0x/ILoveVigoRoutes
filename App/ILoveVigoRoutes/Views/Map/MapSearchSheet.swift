@@ -431,9 +431,10 @@ struct MapSearchSheet: View {
 /// The map's own search affordance, floating above the tab bar.
 ///
 /// Not a sheet, deliberately. A permanently presented sheet — the Apple Maps shape — would
-/// cover the tab bar for as long as the map tab is open, and the other four tabs have to stay
-/// reachable while they exist. When "Planificar" goes away this can be promoted to that
-/// permanent sheet, and the change is this one view.
+/// cover the tab bar for as long as the map tab is open, and Favoritas has to stay reachable
+/// while it exists (Fase 7 got the tab count down to two, not zero). If Favoritas is ever
+/// folded into the map itself this can be promoted to that permanent sheet, and the change
+/// is this one view.
 struct MapBrowseBar: View {
     let action: () -> Void
 

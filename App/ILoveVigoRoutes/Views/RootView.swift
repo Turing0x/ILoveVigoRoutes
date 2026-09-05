@@ -5,7 +5,7 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var selection = AppTab.map
 
-    enum AppTab: Hashable { case favourites, nearby, search, map }
+    enum AppTab: Hashable { case favourites, map }
 
     var body: some View {
         TabView(selection: $selection) {
@@ -15,15 +15,11 @@ struct RootView: View {
             // The map is the app now, so it is what opens. Fase 1's criterion — a favourite
             // stop's arrivals in one tap or none from a cold start — still holds: Favoritas
             // is one tap away, and the map answers the question that brings someone here in
-            // the first place.
+            // the first place. Buscar and Cercanas are gone as tabs (Fase 7): both were
+            // subsets of what `MapSearchSheet` already covers, plus its own "Cerca de ti"
+            // and "Líneas con servicio" sections.
             Tab("Favoritas", systemImage: "star.fill", value: AppTab.favourites) {
                 FavouritesView()
-            }
-            Tab("Buscar", systemImage: "magnifyingglass", value: AppTab.search) {
-                SearchView()
-            }
-            Tab("Cercanas", systemImage: "location.fill", value: AppTab.nearby) {
-                NearbyView()
             }
         }
         .overlay(alignment: .bottom) {
