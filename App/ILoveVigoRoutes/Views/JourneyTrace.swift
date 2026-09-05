@@ -11,9 +11,9 @@ struct JourneyTrace: Identifiable, Sendable {
 /// Turns a `Journey` into what a map needs: the real traces from `shapePoint`, and a region
 /// that holds the whole thing.
 ///
-/// Lives outside the views because two of them draw the same journey — the preview inside
-/// `JourneyDetailView` and the full-screen `JourneyMapView` — and a journey that looked
-/// different in each would be a bug waiting to happen.
+/// Lives outside the views because the map draws several journeys at once — the highlighted
+/// alternative and the others behind it — and a journey that looked different depending on
+/// which of them it was would be a bug waiting to happen.
 enum JourneyTraceBuilder {
 
     static func traces(for journey: Journey, repository: TransitRepository) -> [JourneyTrace] {

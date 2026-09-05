@@ -73,8 +73,7 @@ struct JourneyAlternativeRow: View {
     }
 }
 
-/// One leg, expanded: reused by `JourneyDetailView` once it exists, and here for the
-/// summary row's tap target until it does.
+/// One leg, expanded. Drawn by `MapJourneyLegsView` inside the route sheet.
 struct JourneyLegRow: View {
     @Environment(AppEnvironment.self) private var environment
     let leg: JourneyLeg

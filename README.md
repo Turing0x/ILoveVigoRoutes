@@ -118,7 +118,8 @@ impida confundirlos.
 | Fase 2 — Ferry de la ría | No iniciada |
 | **Fase 3** — Planificador de rutas | **Completa** (solo bus; el ferry entra cuando exista la Fase 2) |
 | Fase 4 — Pulido y comodidades | **Parcial**: lugares y trayectos guardados (CRUD completo), refresco del GTFS en segundo plano, orden de pestañas y estrella de favorito unificada. Quedan fuera, por decisión: widget de pantalla de inicio, atajos de Siri, accesibilidad exhaustiva |
-| **Fase 5** — El mapa como planificador | **Completa** (a falta de la comprobación en dispositivo del propietario) |
+| **Fase 5** — El mapa como planificador | **Completa** |
+| **Fase 6** — Retirada de lo viejo | **Completa**: fuera la pestaña "Planificar" y el detalle de trayecto aparte |
 
 ### Fase 5 — el mapa es el planificador
 
@@ -128,8 +129,10 @@ resultado de búsqueda—, pedir "Cómo llegar" y ver hasta cuatro alternativas 
 trazados reales y el tiempo real del primer embarque, sin salir de la pantalla. Y las paradas
 pasaron a ser una capa **apagada por defecto**: el mapa arranca limpio.
 
-La pestaña "Planificar" sigue viva a propósito hasta que la lista de paridad de once puntos que
-`ESTADO.md` deja escrita esté comprobada en dispositivo. Los once están implementados.
+La pestaña "Planificar" y la pantalla de detalle de trayecto **ya no existen**: cumplida la
+lista de paridad de once puntos que `ESTADO.md` deja escrita, mantenerlas era tener la misma
+lógica en dos sitios. La app abre en el mapa, y los tramos de un trayecto y el seguimiento en
+movimiento ocurren sobre él.
 
 **Punto abierto de la Fase 0:** los horarios de ferry (punto 5) **no se pudieron recopilar**.
 Las tres navieras publican sus horarios en imágenes y tablas generadas por JavaScript, no

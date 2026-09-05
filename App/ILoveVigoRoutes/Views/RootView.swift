@@ -3,23 +3,19 @@ import VigoCore
 
 struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
-    @State private var selection = AppTab.favourites
+    @State private var selection = AppTab.map
 
-    enum AppTab: Hashable { case favourites, nearby, planner, search, map }
+    enum AppTab: Hashable { case favourites, nearby, search, map }
 
     var body: some View {
         TabView(selection: $selection) {
             Tab("Mapa", systemImage: "map.fill", value: AppTab.map) {
                 MapScreen()
             }
-            Tab("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond",
-                value: AppTab.planner) {
-                PlannerView()
-            }
-            // Favourites selected first, deliberately: the acceptance criterion is that
-            // seeing a favourite stop's arrivals from a cold start takes one tap or none.
-            // Its position in the tab order is unrelated — `selection` above is what picks
-            // the launch tab, not declaration order.
+            // The map is the app now, so it is what opens. Fase 1's criterion — a favourite
+            // stop's arrivals in one tap or none from a cold start — still holds: Favoritas
+            // is one tap away, and the map answers the question that brings someone here in
+            // the first place.
             Tab("Favoritas", systemImage: "star.fill", value: AppTab.favourites) {
                 FavouritesView()
             }
@@ -34,6 +30,11 @@ struct RootView: View {
             if environment.isRefreshing, !environment.hasData {
                 FirstImportOverlay()
             }
+        }
+        // Another tab asked the map to plan something. Switching here rather than inside the
+        // asking view keeps the tab selection in the one place that owns it.
+        .onChange(of: environment.pendingSavedJourney) { _, journey in
+            if journey != nil { selection = .map }
         }
     }
 }

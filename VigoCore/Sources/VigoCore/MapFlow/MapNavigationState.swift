@@ -99,6 +99,15 @@ public struct MapNavigationState: Sendable {
     /// state, with nothing to ask CoreLocation at the moment of planning.
     public private(set) var currentLocation: Coordinate?
 
+    /// True while the map is following the user along an open journey.
+    ///
+    /// What this turns on is not a screen — the map is already the screen — but three things
+    /// that cost something to keep on: a camera that tracks heading, the screen kept awake,
+    /// and a finer location accuracy. All three are worth it while walking to a stop and
+    /// wasteful the rest of the time, so the flag has to switch off on its own whenever the
+    /// journey underneath it stops being the one being followed.
+    public private(set) var isFollowing = false
+
     public init() {}
 
     // MARK: - Selection
@@ -220,6 +229,8 @@ public struct MapNavigationState: Sendable {
     private mutating func invalidateResult() {
         route = .idle
         selectedAlternative = 0
+        // Whatever was being followed no longer exists as an answer.
+        isFollowing = false
         if case .journeyDetail = mode { mode = .routing }
     }
 
@@ -237,6 +248,7 @@ public struct MapNavigationState: Sendable {
     public mutating func planningStarted() {
         route = .planning
         selectedAlternative = 0
+        isFollowing = false
     }
 
     /// Folds a `PlanOutcome` into the three shapes the UI draws.
@@ -266,7 +278,11 @@ public struct MapNavigationState: Sendable {
 
     public mutating func selectAlternative(at index: Int) {
         guard route.journeys.indices.contains(index) else { return }
+        guard index != selectedAlternative else { return }
         selectedAlternative = index
+        // Following is about *this* journey. Highlighting another one and carrying the
+        // follow over would point the camera down a route the user just stopped choosing.
+        isFollowing = false
     }
 
     public var currentJourney: Journey? {
@@ -274,6 +290,22 @@ public struct MapNavigationState: Sendable {
         guard journeys.indices.contains(selectedAlternative) else { return nil }
         return journeys[selectedAlternative]
     }
+
+    // MARK: - Seguimiento
+
+    /// Starts following, but only from an open journey.
+    ///
+    /// Following a route nobody is looking at would keep the screen awake and the GPS at full
+    /// accuracy for nothing, so the precondition is part of the state machine rather than a
+    /// check the view is trusted to remember.
+    @discardableResult
+    public mutating func startFollowing() -> Bool {
+        guard case .journeyDetail = mode, currentJourney != nil else { return false }
+        isFollowing = true
+        return true
+    }
+
+    public mutating func stopFollowing() { isFollowing = false }
 
     /// Opens the highlighted alternative leg by leg. No-op when there is nothing to open.
     @discardableResult
@@ -295,6 +327,12 @@ public struct MapNavigationState: Sendable {
     /// `.routing` → the destination's card, which is where the route was asked for.
     /// `.place` / `.searching` → the clean map. `.browsing` → nowhere; it is the floor.
     public mutating func dismiss() {
+        // Following is a level of its own, above the leg list: someone who taps back while
+        // the camera is chasing them means "stop chasing me", not "close the journey".
+        if isFollowing {
+            isFollowing = false
+            return
+        }
         switch mode {
         case .journeyDetail:
             mode = .routing
@@ -315,6 +353,7 @@ public struct MapNavigationState: Sendable {
     /// new search should start from.
     public mutating func reset() {
         mode = .browsing
+        isFollowing = false
         destination = nil
         route = .idle
         selectedAlternative = 0

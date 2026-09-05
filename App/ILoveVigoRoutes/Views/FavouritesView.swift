@@ -57,54 +57,9 @@ final class FavouritesModel {
     }
 }
 
-/// Runs a saved journey's query the instant it is tapped — the whole point of saving it is
-/// skipping the planner form — and holds the one result worth pushing to, or the one
-/// message worth showing, from whichever `PlanOutcome` came back.
-@MainActor
-@Observable
-final class SavedJourneyPlanModel {
-    private let planner: JourneyPlanner
-    private(set) var planningID: SavedJourneyID?
-    private(set) var resultJourney: Journey?
-    private(set) var failureMessage: String?
-
-    init(planner: JourneyPlanner) {
-        self.planner = planner
-    }
-
-    func plan(_ journey: SavedJourney) async {
-        planningID = journey.id
-        defer { planningID = nil }
-        do {
-            let result = try await planner.plan(journey.query)
-            switch result.outcome {
-            case .journeys(let alternatives):
-                // Una lista vacía no es un éxito sin nada dentro: es el mismo "no hay
-                // ninguna" que `noJourneyFound`, y así lo dice.
-                if let best = alternatives.first {
-                    resultJourney = best
-                } else {
-                    failureMessage = PlanOutcomeMessage.failure(
-                        .noJourneyFound(horizon: 0), context: .savedJourney)
-                }
-            case .walkOnly(let journey):
-                resultJourney = journey
-            default:
-                failureMessage = PlanOutcomeMessage.failure(result.outcome, context: .savedJourney)
-            }
-        } catch {
-            failureMessage = (error as? CustomStringConvertible)?.description ?? error.localizedDescription
-        }
-    }
-
-    func clearResult() { resultJourney = nil }
-    func clearFailure() { failureMessage = nil }
-}
-
 struct FavouritesView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: FavouritesModel?
-    @State private var journeyPlanModel: SavedJourneyPlanModel?
     @State private var showingDataSources = false
     @State private var creatingPlace = false
     @State private var creatingJourney = false
@@ -164,24 +119,9 @@ struct FavouritesView: View {
             .sheet(item: $editingJourney) { journey in
                 SavedJourneyEditorView(mode: .edit(journey))
             }
-            .navigationDestination(item: Binding(
-                get: { journeyPlanModel?.resultJourney },
-                set: { new in if new == nil { journeyPlanModel?.clearResult() } }
-            )) { journey in
-                JourneyDetailView(journey: journey)
-            }
-            .alert("No se pudo planificar", isPresented: Binding(
-                get: { journeyPlanModel?.failureMessage != nil },
-                set: { isPresented in if !isPresented { journeyPlanModel?.clearFailure() } }
-            )) {
-                Button("Vale", role: .cancel) {}
-            } message: {
-                Text(journeyPlanModel?.failureMessage ?? "")
-            }
         }
         .task {
             if model == nil { model = FavouritesModel(environment: environment) }
-            if journeyPlanModel == nil { journeyPlanModel = SavedJourneyPlanModel(planner: environment.planner) }
             model?.startAutoRefresh(for: environment.favourites.stops)
         }
         .onChange(of: environment.favourites.stops) { _, stops in
@@ -232,7 +172,9 @@ struct FavouritesView: View {
 
     private func journeyRow(_ journey: SavedJourney) -> some View {
         Button {
-            Task { await journeyPlanModel?.plan(journey) }
+            // Planning happens in exactly one place now. Tapping here is a request, not an
+            // action: `RootView` switches to the map and `MapScreen` runs it.
+            environment.requestOnMap(journey)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.triangle.turn.up.right.diamond")
@@ -250,9 +192,10 @@ struct FavouritesView: View {
                     }
                 }
                 Spacer(minLength: 4)
-                if journeyPlanModel?.planningID == journey.id {
-                    ProgressView().controlSize(.mini)
-                }
+                Image(systemName: "map")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .padding(.vertical, 2)
         }

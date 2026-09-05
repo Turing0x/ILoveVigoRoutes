@@ -246,6 +246,10 @@ final class MapScreenModel {
 
     func dismiss() { state.dismiss() }
 
+    @discardableResult
+    func startFollowing() -> Bool { state.startFollowing() }
+    func stopFollowing() { state.stopFollowing() }
+
     /// Traces for the highlighted alternative only, for whatever draws exactly one.
     var selectedTraces: [JourneyTrace] {
         traces.indices.contains(state.selectedAlternative) ? traces[state.selectedAlternative] : []

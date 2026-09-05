@@ -446,3 +446,122 @@ struct SavedEndpointInputFromMapPlaceTests {
         }
     }
 }
+
+/// El modo seguimiento, que existe para encender tres cosas caras —cámara con rumbo, pantalla
+/// despierta y GPS fino— y que por tanto tiene que apagarse solo en cuanto deja de tener
+/// sentido.
+@Suite("Seguimiento en el mapa")
+struct MapFollowingTests {
+
+    private let here = Coordinate(latitude: 42.2328, longitude: -8.7226)
+    private let there = Coordinate(latitude: 42.2400, longitude: -8.7100)
+    private let clock = Date(timeIntervalSince1970: 1_757_000_000)
+
+    private func poi(_ name: String) -> MapPlace {
+        MapPlace(place: .coordinate(there, label: name), subtitle: nil, origin: .pointOfInterest)
+    }
+
+    private func journey(_ offset: TimeInterval) -> Journey {
+        Journey(legs: [.walk(from: MapPlace.currentLocation(here).place,
+                             to: poi("Destino").place, seconds: 600, metres: 700)],
+                departure: clock.addingTimeInterval(offset),
+                arrival: clock.addingTimeInterval(offset + 600), transfers: 0)
+    }
+
+    /// Estado con una ruta calculada y el detalle abierto: el único sitio desde el que se
+    /// puede empezar a seguir.
+    private func openedJourney(alternatives: Int = 1) -> MapNavigationState {
+        var state = MapNavigationState()
+        state.updateCurrentLocation(here)
+        state.select(poi("Destino"))
+        state.route(to: poi("Destino"))
+        state.planningFinished(.journeys((0..<alternatives).map { journey(Double($0) * 300) }))
+        state.openSelectedAlternative()
+        return state
+    }
+
+    @Test("No se puede seguir un trayecto que no está abierto")
+    func followingNeedsAnOpenJourney() {
+        var browsing = MapNavigationState()
+        let fromBrowsing = browsing.startFollowing()
+        #expect(!fromBrowsing)
+        #expect(!browsing.isFollowing)
+
+        // Con alternativas a la vista pero sin abrir ninguna, tampoco.
+        var listed = openedJourney()
+        listed.dismiss()
+        #expect(listed.mode == .routing)
+        let fromList = listed.startFollowing()
+        #expect(!fromList)
+        #expect(!listed.isFollowing)
+    }
+
+    @Test("Desde el detalle sí se puede")
+    func followingStartsFromTheDetail() {
+        var state = openedJourney()
+        let started = state.startFollowing()
+        #expect(started)
+        #expect(state.isFollowing)
+
+        state.stopFollowing()
+        #expect(!state.isFollowing)
+    }
+
+    /// Quien toca "atrás" con la cámara persiguiéndole quiere que deje de perseguirle, no
+    /// cerrar el trayecto. Es un nivel propio, por encima de la lista de tramos.
+    @Test("`dismiss` sale primero del seguimiento y no del nivel")
+    func dismissLeavesFollowingFirst() {
+        var state = openedJourney()
+        state.startFollowing()
+
+        state.dismiss()
+        #expect(!state.isFollowing)
+        #expect(state.mode == .journeyDetail, "el trayecto sigue abierto")
+
+        state.dismiss()
+        #expect(state.mode == .routing, "y ahora sí se retrocede")
+    }
+
+    @Test("Destacar otra alternativa deja de seguir la anterior")
+    func changingAlternativeStopsFollowing() {
+        var state = openedJourney(alternatives: 2)
+        state.startFollowing()
+
+        state.selectAlternative(at: 1)
+        #expect(!state.isFollowing, "seguir apuntaba a un trayecto que ya no es el elegido")
+    }
+
+    @Test("Volver a destacar la misma alternativa no interrumpe el seguimiento")
+    func reselectingTheSameAlternativeKeepsFollowing() {
+        var state = openedJourney(alternatives: 2)
+        state.startFollowing()
+        state.selectAlternative(at: state.selectedAlternative)
+        #expect(state.isFollowing)
+    }
+
+    @Test("Editar un extremo apaga el seguimiento")
+    func editingEndsStopsFollowing() {
+        var state = openedJourney()
+        state.startFollowing()
+        state.setDestination(poi("Otro"))
+        #expect(!state.isFollowing, "lo que se seguía ya no existe como respuesta")
+        #expect(state.mode == .routing)
+    }
+
+    @Test("Replanificar apaga el seguimiento")
+    func replanningStopsFollowing() {
+        var state = openedJourney()
+        state.startFollowing()
+        state.planningStarted()
+        #expect(!state.isFollowing)
+    }
+
+    @Test("Cerrar la hoja apaga el seguimiento")
+    func resetStopsFollowing() {
+        var state = openedJourney()
+        state.startFollowing()
+        state.reset()
+        #expect(!state.isFollowing)
+        #expect(state.mode == .browsing)
+    }
+}

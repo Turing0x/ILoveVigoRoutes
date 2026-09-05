@@ -14,7 +14,8 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | ✅ Completa. Falta comprobación en dispositivo del propietario |
+| **Fase 5 — El mapa como planificador** | ✅ Completa y comprobada en dispositivo |
+| **Fase 6 — Retirada de lo viejo** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -929,13 +930,85 @@ dejarlo escrito: **un test con datos cómodos no ve la mitad de los fallos**; en
 el dato de prueba estaba tan lejos del borde que romper la aritmética no cambiaba el
 resultado.
 
+## Fase 6 — El mapa, sin la muleta anterior
+
+Plan en `~/.claude/plans/listo-todo-probado-tenemos-luminous-rivest.md`. Nace de la prueba en
+dispositivo de la Fase 5 (iPhone 17 Pro Max, Release, 2026-09-05): el flujo funcionaba, pero
+la fase se había construido **sin retirar lo viejo**, y la prueba destapó tres defectos de
+interacción.
+
+### Hecho
+
+- [x] **El botón de "mi ubicación" no estaba roto: estaba tapado.**
+  `MapUserLocationButton` vivía dentro de `.mapControls`, cuya posición decide MapKit, y
+  encima había un `.overlay(alignment: .topTrailing)` propio para el conmutador de capas,
+  empujado con un `.padding(.top, 54)` puesto a ojo. Los dos caían en la misma esquina y el
+  overlay, que se dibuja por encima, **se comía el toque**: el gesto no llegaba nunca. No era
+  un fallo de la cámara, y por eso ajustar el padding no habría arreglado nada.
+  Ahora los dos botones son nuestros y viven en un único `VStack`, así que sus posiciones no
+  pueden discrepar. `.mapControls` se queda solo con `MapScaleView` (abajo a la izquierda, sin
+  colisión posible) y **se retira `MapCompass`**, que vuelve a esa misma esquina en cuanto el
+  mapa se rota. De paso, el botón propio puede deshabilitarse y explicarse sin permiso de
+  ubicación, cosa que el de MapKit no hace.
+
+- [x] **La ficha abre mostrando sus acciones.**
+  `presentationDetents` sin `selection:` abre en el detente **más pequeño**, y el más pequeño
+  aquí era el de 180 pt que solo enseña el título: cada ficha llegaba con "Cómo llegar" y
+  "Guardar" escondidos tras un arrastre que el usuario no tenía por qué hacer. Con la binding
+  puesta, cada modo entra por la altura que le corresponde —ficha y ruta a 0,45, búsqueda a
+  `.large`, seguimiento al mínimo— y el detente pequeño sigue existiendo para bajarla a mano.
+
+- [x] **El mapa abre la app.** `RootView`: `selection = .map`. El criterio de la Fase 1 —ver
+  las llegadas de una favorita en un toque o ninguno desde arranque en frío— sigue en pie:
+  Favoritas queda a un toque, y el mapa contesta la pregunta que trae a alguien a la app.
+
+- [x] **Muere la pestaña "Planificar".** Los once puntos de paridad quedaron comprobados en
+  dispositivo, que era la condición escrita. Fuera `.planner` de `AppTab`,
+  `Views/PlannerView.swift` y `ILoveVigoRoutesTests/PlannerModelTests.swift`. Quedan cuatro
+  pestañas: Mapa · Favoritas · Buscar · Cercanas.
+  **`PlacePickerView` sobrevive**, con `PickedPlace` y `MapPointPickerView`: las usan
+  `SavedPlaceEditorView` y `SavedJourneyEditorView`, que no son parte del flujo del mapa.
+  Comprobado por `grep` antes de borrar, no supuesto.
+
+- [x] **El detalle del trayecto deja de ser pantalla aparte.** Borradas
+  `Views/JourneyDetailView.swift` y `Views/JourneyMapView.swift`. Con el mapa a pantalla
+  completa detrás de la hoja, un minimapa no interactivo dentro de una lista que empujaba a
+  otro mapa era un rodeo para volver a donde ya estabas. Los tramos pasan a
+  `MapJourneyLegsView`, un nivel más de `MapRouteSheet`, reutilizando `JourneyLegRow` sin
+  tocarla; la anotación en vivo la sirve `FirstBoardingLive`, que ya la calculaba, en vez de
+  repetir la consulta.
+
+- [x] **El seguimiento se salva y sube al mapa principal.** Lo que `JourneyMapView` aportaba
+  de verdad no era el mapa —eso ya lo había— sino tres cosas que sí se habrían perdido:
+  cámara con rumbo, pantalla que no se apaga mientras caminas, y precisión `Best` en vez de
+  los cien metros que bastan para "qué paradas tengo cerca". Ahora es `isFollowing` en
+  `MapNavigationState`, con sus reglas en `VigoCore` y no en la vista: seguir solo tiene
+  sentido con un trayecto abierto; `dismiss()` **sale del seguimiento antes** de retroceder de
+  nivel, porque quien toca atrás con la cámara persiguiéndole quiere que deje de perseguirle,
+  no cerrar el trayecto; y destacar otra alternativa, editar un extremo, replanificar o cerrar
+  la hoja lo apagan. `MapScreen` restaura el autobloqueo también en `onDisappear`: irse de la
+  pestaña no puede dejar la pantalla clavada encendida.
+  **Verificado por mutación, siete veces**, una por regla. Las siete tumban tests.
+
+- [x] **Favoritas salta al mapa.** Tocar un trayecto guardado empujaba `JourneyDetailView`.
+  Ahora es una petición: `AppEnvironment.requestOnMap(_:)`, `RootView` cambia de pestaña y
+  `MapScreen` la consume **y la limpia** —sin eso, volver al mapa más tarde replanificaría
+  un trayecto que nadie pidió—. Con ello **se borra `SavedJourneyPlanModel`** y su traducción
+  propia de `PlanOutcome`: planificar deja de ocurrir en dos sitios.
+
+**Un tropiezo de entorno, no de código.** A mitad de la fase `xcodebuild` empezó a decir
+*"iOS 26.5 is not installed"* y dejó de resolver el destino, después de haber compilado bien
+media hora antes. Era Xcode, que estaba abierto e indexando tras haber añadido la cuenta de
+firma; cerrándolo, todo volvió a compilar sin descargar nada. Queda anotado porque el mensaje
+de error apunta a una descarga de plataforma que no hacía ninguna falta.
+
+Suite de `VigoCore`: **273 tests en verde** (+8). Tests del target de app: bajan de 23 a 17 al
+irse `PlannerModelTests`. Debug y Release compilan, y la app está instalada en el dispositivo.
+
 ## Retirada de la pestaña "Planificar"
 
-Sigue viva **a propósito**, tal como el propietario pidió: primero que el mapa funcione, luego
-se borra. Este es el criterio, para que la decisión no dependa de la memoria de nadie.
-
-**Lista de paridad: los once puntos están implementados.** Falta solo comprobarlos en
-dispositivo; hasta entonces la pestaña se queda.
+**Hecha en la Fase 6.** Se conserva la lista de paridad por la que se autorizó, como registro
+de qué tenía que cumplir el mapa antes de que la pestaña pudiera desaparecer.
 
 1. Origen por ubicación que sigue al GPS hasta que se toca. ✅ implementado
 2. Origen y destino intercambiables. ✅
@@ -998,13 +1071,13 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **265 tests de `VigoCore` en verde** (170 antes de la Fase 4;
+Al escribir este documento: **273 tests de `VigoCore` en verde** (170 antes de la Fase 4;
 +24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +71 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
 `JourneySummaryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
-apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
-en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
+apuntando al archivo publicado, y **17 tests del target de app** (eran 23 hasta que la Fase 6 se llevó
+`PlannerModelTests` con la pestaña que probaba).
 
 Desde la Fase 5 el propietario prueba **solo en dispositivo**, no en simulador. Aquí se
 verifica con `swift test` (que corre en el Mac) y con compilación contra

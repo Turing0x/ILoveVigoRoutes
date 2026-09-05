@@ -1,5 +1,7 @@
 import SwiftUI
 import MapKit
+import UIKit
+import CoreLocation
 import VigoCore
 
 /// The map tab.
@@ -22,6 +24,12 @@ struct MapScreen: View {
         span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)))
     @State private var selection: MapSelection<StopID>?
     @State private var live: FirstBoardingLive?
+    /// Which detent the sheet is showing.
+    ///
+    /// Bound rather than left to the system: `presentationDetents` on its own opens at the
+    /// smallest, and the smallest here is the peek that shows only a title — so every place
+    /// card arrived with its buttons hidden behind a drag the user should not have to do.
+    @State private var detent: PresentationDetent = .fraction(0.45)
     /// Camera moves are animated by MapKit unless told otherwise. Someone who has asked the
     /// system for less motion has asked for exactly this kind of less.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -57,6 +65,11 @@ struct MapScreen: View {
                 live = FirstBoardingLive(arrivals: environment.arrivals)
             }
             model?.loadStops()
+            // The request may have arrived before this screen existed — Favourites can be the
+            // first tab touched on a cold start.
+            if let requested = environment.consumePendingSavedJourney() {
+                await model?.route(savedJourney: requested)
+            }
             location.requestPermissionIfNeeded()
             location.start()
             if let coordinate = location.coordinate {
@@ -73,6 +86,8 @@ struct MapScreen: View {
         .onDisappear {
             location.stop()
             live?.cancel()
+            // Leaving the tab must not leave the screen pinned awake.
+            UIApplication.shared.isIdleTimerDisabled = false
         }
         .onChange(of: environment.feedStatus.importedAt) { model?.loadStops() }
     }
@@ -104,11 +119,13 @@ struct MapScreen: View {
             }
             // Apple draws its own card for a selected point of interest. Ours replaces it.
             .mapFeatureSelectionAccessory(nil)
-            .mapControls {
-                MapUserLocationButton()
-                MapCompass()
-                MapScaleView()
-            }
+            // Only the scale, which lives bottom-left and collides with nothing. The user
+            // location button used to come from here, and MapKit decides where its controls
+            // go — which put it under the layers button below, where it was not just ugly but
+            // unreachable: the overlay swallowed every tap. Both buttons are ours now, in one
+            // stack, so their positions cannot disagree. The compass goes with it: it returns
+            // to this same corner the moment the map is rotated.
+            .mapControls { MapScaleView() }
             .onMapCameraChange(frequency: .onEnd) { context in
                 model.viewportChanged(to: MapStopsLayer.Viewport(
                     centreLatitude: context.region.center.latitude,
@@ -152,6 +169,19 @@ struct MapScreen: View {
             .onChange(of: model.state.selectedPlace) { _, place in
                 if let place { focus(on: place) }
             }
+            // The sheet's height is part of what each mode means: a card is useless with its
+            // actions hidden, a search wants the whole screen, and following wants the map.
+            .onChange(of: model.state.mode) { _, mode in
+                detent = defaultDetent(for: mode)
+            }
+            .onChange(of: model.state.isFollowing) { _, following in
+                applyFollowing(following)
+            }
+            .onChange(of: environment.pendingSavedJourney) { _, journey in
+                guard journey != nil, let requested = environment.consumePendingSavedJourney()
+                else { return }
+                Task { await model.route(savedJourney: requested) }
+            }
             // Framing follows the answer, not the question: as soon as there are routes, the
             // camera opens on all of them rather than staying on the destination pin.
             .onChange(of: model.state.route.journeys) { _, journeys in
@@ -166,7 +196,8 @@ struct MapScreen: View {
                 frame(journeys: model.state.route.journeys, traces: model.traces)
             }
             .overlay(alignment: .top) { hint(model) }
-            .overlay(alignment: .topTrailing) { layersButton(model) }
+            .overlay(alignment: .topTrailing) { controls(model) }
+            .overlay(alignment: .bottom) { followingBanner(model) }
             // Only while browsing: once a card or a route is up, the sheet is the way in and
             // a second search affordance underneath it would be a second front door.
             .safeAreaInset(edge: .bottom) {
@@ -182,7 +213,8 @@ struct MapScreen: View {
                 set: { if !$0 { dismissSheet(model) } }
             )) {
                 sheetContent(model)
-                    .presentationDetents([.height(sheetPeek), .fraction(sheetFraction), .large])
+                    .presentationDetents([.height(sheetPeek), .fraction(sheetFraction), .large],
+                                         selection: $detent)
                     .presentationBackgroundInteraction(.enabled(upThrough: .fraction(sheetFraction)))
                     .presentationDragIndicator(.visible)
             }
@@ -217,6 +249,8 @@ struct MapScreen: View {
                 onSelect: { model.selectAlternative(at: $0) },
                 onOpen: { model.openSelectedAlternative() },
                 onCloseDetail: { model.dismiss() },
+                onFollow: { model.startFollowing() },
+                onStopFollowing: { model.stopFollowing() },
                 onClose: { dismissSheet(model) })
 
         case .searching:
@@ -244,6 +278,36 @@ struct MapScreen: View {
             center: CLLocationCoordinate2D(latitude: region.center.latitude - lift,
                                            longitude: region.center.longitude),
             span: region.span))
+    }
+
+    private func defaultDetent(for mode: MapNavigationState.Mode) -> PresentationDetent {
+        switch mode {
+        case .searching: .large
+        case .place, .routing, .journeyDetail: .fraction(sheetFraction)
+        case .browsing: .height(sheetPeek)
+        }
+    }
+
+    /// Everything follow mode actually costs, switched on and off in one place.
+    ///
+    /// This is what `JourneyMapView` used to own. The full-screen map it also provided is no
+    /// longer worth a screen of its own — this map is already full screen — but these three
+    /// are: a camera that tracks heading, a screen that does not sleep while walking, and a
+    /// finer fix than the hundred metres that answers "which stops are near me".
+    private func applyFollowing(_ following: Bool) {
+        UIApplication.shared.isIdleTimerDisabled = following
+        if following {
+            location.start(accuracy: kCLLocationAccuracyBest)
+            camera = .userLocation(followsHeading: true,
+                                   fallback: .region(MKCoordinateRegion(
+                                       center: LocationProvider.vigoCentre,
+                                       span: MKCoordinateSpan(latitudeDelta: 0.01,
+                                                              longitudeDelta: 0.01))))
+            detent = .height(sheetPeek)
+        } else {
+            location.stop()
+            location.start()
+        }
     }
 
     /// Height of the smallest detent, and the share of the screen the medium one covers.
@@ -300,21 +364,66 @@ struct MapScreen: View {
         }
     }
 
-    private func layersButton(_ model: MapScreenModel) -> some View {
-        Menu {
-            Toggle(isOn: Binding(get: { model.stopsVisible },
-                                 set: { model.stopsVisible = $0 })) {
-                Label("Mostrar paradas", systemImage: "bus.fill")
+    /// The map's own controls, in one stack so their positions cannot disagree.
+    private func controls(_ model: MapScreenModel) -> some View {
+        VStack(spacing: 10) {
+            Button {
+                recentreOnUser()
+            } label: {
+                Image(systemName: location.isAuthorized ? "location.fill" : "location.slash")
+                    .font(.title3)
+                    .frame(width: 24, height: 24)
+                    .padding(9)
+                    .background(.regularMaterial, in: Circle())
             }
-        } label: {
-            Image(systemName: model.stopsVisible ? "square.3.layers.3d" : "square.3.layers.3d.slash")
-                .font(.title3)
-                .padding(9)
-                .background(.regularMaterial, in: Circle())
+            .disabled(!location.isAuthorized)
+            .accessibilityLabel("Centrar en mi ubicación")
+
+            Menu {
+                Toggle(isOn: Binding(get: { model.stopsVisible },
+                                     set: { model.stopsVisible = $0 })) {
+                    Label("Mostrar paradas", systemImage: "bus.fill")
+                }
+            } label: {
+                Image(systemName: model.stopsVisible
+                      ? "square.3.layers.3d" : "square.3.layers.3d.slash")
+                    .font(.title3)
+                    .frame(width: 24, height: 24)
+                    .padding(9)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .accessibilityLabel("Capas del mapa")
         }
-        .accessibilityLabel("Capas del mapa")
         .padding(.trailing, 10)
-        // Clear of MapKit's own controls, which sit on this same edge lower down.
-        .padding(.top, 54)
+        .padding(.top, 10)
+    }
+
+    /// Follow mode is easy to start and must be just as easy to leave, without hunting for the
+    /// sheet that started it — which by then is sitting at its smallest detent.
+    @ViewBuilder
+    private func followingBanner(_ model: MapScreenModel) -> some View {
+        if model.state.isFollowing {
+            Button {
+                model.stopFollowing()
+            } label: {
+                Label("Dejar de seguir", systemImage: "location.slash.fill")
+                    .font(.footnote)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 6)
+        }
+    }
+
+    /// Centres on the device. Never silently: with no fix yet there is nothing to centre on,
+    /// and the button is already disabled when there is no permission.
+    private func recentreOnUser() {
+        camera = .userLocation(followsHeading: false,
+                               fallback: .region(MKCoordinateRegion(
+                                   center: LocationProvider.vigoCentre,
+                                   span: MKCoordinateSpan(latitudeDelta: 0.04,
+                                                          longitudeDelta: 0.04))))
     }
 }

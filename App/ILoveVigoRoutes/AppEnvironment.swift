@@ -21,6 +21,21 @@ final class AppEnvironment {
     private let timetableStore: TimetableStore
     private let throttledRealtime: ThrottledRealtimeProvider
 
+    /// A saved journey that some other tab asked the map to plan, waiting to be consumed.
+    ///
+    /// The only thing two tabs share. Favourites used to plan a saved journey itself and push
+    /// its own detail screen; now planning happens in exactly one place, so tapping one there
+    /// is a request rather than an action — `RootView` switches to the map, `MapScreen` takes
+    /// it and clears it. Clearing matters: without it, coming back to the map later would
+    /// replan a journey nobody asked for again.
+    private(set) var pendingSavedJourney: SavedJourney?
+
+    func requestOnMap(_ journey: SavedJourney) { pendingSavedJourney = journey }
+    func consumePendingSavedJourney() -> SavedJourney? {
+        defer { pendingSavedJourney = nil }
+        return pendingSavedJourney
+    }
+
     /// Progress of the current import, or `nil` when nothing is running.
     private(set) var importProgress: ImportProgress?
     private(set) var importFailure: String?

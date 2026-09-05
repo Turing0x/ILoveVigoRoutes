@@ -18,6 +18,8 @@ struct MapRouteSheet: View {
     let onSelect: (Int) -> Void
     let onOpen: () -> Void
     let onCloseDetail: () -> Void
+    let onFollow: () -> Void
+    let onStopFollowing: () -> Void
     let onClose: () -> Void
 
     /// Which end is being replaced, or `nil` when neither is.
@@ -83,15 +85,18 @@ struct MapRouteSheet: View {
                     Button("Cerrar", action: onClose)
                 }
             }
-            // The leg-by-leg view is `JourneyDetailView`, unchanged from Fase 3: the trace,
-            // the legs, the live first boarding, and the push into `JourneyMapView` for
-            // following the route. Driven from `mode` rather than from a local `NavigationLink`
-            // so that going back lands where `MapNavigationState.dismiss` says it should.
+            // Driven from `mode` rather than from a local `NavigationLink` so that going
+            // back lands where `MapNavigationState.dismiss` says it should — which, while
+            // following, means stopping the follow before closing anything.
             .navigationDestination(item: Binding(
                 get: { state.mode == .journeyDetail ? state.currentJourney : nil },
                 set: { if $0 == nil { onCloseDetail() } }
             )) { journey in
-                JourneyDetailView(journey: journey)
+                MapJourneyLegsView(journey: journey,
+                                   live: live(journey),
+                                   isFollowing: state.isFollowing,
+                                   onFollow: onFollow,
+                                   onStopFollowing: onStopFollowing)
             }
             .sheet(item: $editing) { role in
                 MapSearchSheet(purpose: .endpoint(role),
@@ -206,5 +211,55 @@ struct MapRouteSheet: View {
                 }
             }
         }
+    }
+}
+
+/// One journey, leg by leg, inside the route sheet.
+///
+/// Replaces `JourneyDetailView`, which put a small non-interactive map inside a list and
+/// pushed a second full-screen map to make it useful. With the real map already behind this
+/// sheet — and already highlighting exactly this alternative — that whole detour existed to
+/// get back to where the user started.
+struct MapJourneyLegsView: View {
+    let journey: Journey
+    let live: Arrival?
+    let isFollowing: Bool
+    let onFollow: () -> Void
+    let onStopFollowing: () -> Void
+
+    var body: some View {
+        List {
+            if let live {
+                Section {
+                    HStack(spacing: 10) {
+                        DataKindBadge(kind: live.confidence.hasTrackedVehicle ? .tracked : .estimated)
+                        Text(WaitTime(minutes: live.minutes).inlineText)
+                            .font(.subheadline)
+                        Spacer(minLength: 0)
+                    }
+                } header: {
+                    Text("Primer embarque, en vivo")
+                } footer: {
+                    Text("El resto del trayecto sigue siendo el horario: el tiempo real solo cubre la parada de origen.")
+                }
+            }
+
+            Section {
+                Button(isFollowing ? "Dejar de seguir" : "Seguir en el mapa",
+                       systemImage: isFollowing ? "location.slash.fill" : "location.fill") {
+                    isFollowing ? onStopFollowing() : onFollow()
+                }
+            } footer: {
+                Text("Mantiene la pantalla encendida y la cámara mirando hacia donde caminas. Sin avisos de bajada: el horario por sí solo no puede prometerlos.")
+            }
+
+            Section("Tramos") {
+                ForEach(Array(journey.legs.enumerated()), id: \.offset) { _, leg in
+                    JourneyLegRow(leg: leg)
+                }
+            }
+        }
+        .navigationTitle("Trayecto")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
