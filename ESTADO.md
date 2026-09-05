@@ -18,7 +18,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 6 — Retirada de lo viejo** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Fase 7 — Un solo buscador, dos pestañas** | ✅ Hecha y fusionada a `main` |
 | **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha y comprobada en dispositivo |
-| **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha. Pendiente de comprobación en dispositivo |
+| **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 
 ---
 
@@ -1323,11 +1323,11 @@ horarios colapsa en una sola lista legible.
 **Fase 9 completa — 2 pasos.** Suite de `VigoCore`: **291 tests en verde** (+13). Target de app:
 **16 tests en verde**, sin cambios. Debug y Release compilan contra `generic/platform=iOS`.
 
-**Pendiente de comprobar en dispositivo** (lo hace el propietario):
+**Comprobado en dispositivo por el propietario** (2026-09-05), los seis puntos:
 
-- [ ] Desde un tramo en bus se llega a los horarios de esa línea en esa parada
-- [ ] La lista abre por la próxima salida, no por las 6 de la mañana
-- [ ] Una parada con los dos sentidos: dos secciones, no una columna mezclada
-- [ ] Una línea nocturna: las salidas de después de medianoche aparecen en el día correcto
-- [ ] El selector de día solo ofrece los días que el feed cubre
-- [ ] La tabla se lee de un vistazo en la pantalla del iPhone
+- [x] Desde un tramo en bus se llega a los horarios de esa línea en esa parada
+- [x] La lista abre por la próxima salida, no por las 6 de la mañana
+- [x] Una parada con los dos sentidos: dos secciones, no una columna mezclada
+- [x] Una línea nocturna: las salidas de después de medianoche aparecen en el día correcto
+- [x] El selector de día solo ofrece los días que el feed cubre
+- [x] La tabla se lee de un vistazo en la pantalla del iPhone
