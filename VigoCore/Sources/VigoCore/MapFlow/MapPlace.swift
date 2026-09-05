@@ -142,3 +142,25 @@ extension SavedJourney {
         (MapPlace.savedEndpoint(origin), MapPlace.savedEndpoint(destination))
     }
 }
+
+extension MapPlace {
+    /// This place as one end of a journey about to be saved.
+    ///
+    /// Two rules, both of which matter once the feed is reimported:
+    ///
+    /// - A place anchored to a **stop** is stored as its `stopID` plus a fallback coordinate,
+    ///   never as a `Stop` blob. `GTFSImporter` deletes and rewrites the whole `stop` table
+    ///   every week, so a stored stop would go stale silently; the fallback coordinate is what
+    ///   keeps the journey plannable if the stop is gone entirely.
+    /// - A place that came from a **saved place** stays *linked* to it, so renaming "Casa"
+    ///   later renames it here too. Everything else — an address, a pressed point, an Apple
+    ///   POI — is ad hoc by definition: there is no saved place for it to track.
+    public var savedEndpointInput: SavedEndpointInput {
+        let anchor: SavedPlaceAnchorInput = stop.map { .stop($0) } ?? .coordinate(coordinate)
+        if case .savedPlace(let id) = origin {
+            return SavedEndpointInput(placeID: id, name: label, symbolName: symbolName,
+                                      anchor: anchor)
+        }
+        return .adHoc(name: label, symbolName: symbolName, anchor: anchor)
+    }
+}

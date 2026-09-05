@@ -128,8 +128,8 @@ resultado de búsqueda—, pedir "Cómo llegar" y ver hasta cuatro alternativas 
 trazados reales y el tiempo real del primer embarque, sin salir de la pantalla. Y las paradas
 pasaron a ser una capa **apagada por defecto**: el mapa arranca limpio.
 
-La pestaña "Planificar" sigue viva a propósito hasta completar la lista de paridad de once
-puntos que `ESTADO.md` deja escrita; hoy falta uno (guardar el trayecto desde la hoja de ruta).
+La pestaña "Planificar" sigue viva a propósito hasta que la lista de paridad de once puntos que
+`ESTADO.md` deja escrita esté comprobada en dispositivo. Los once están implementados.
 
 **Punto abierto de la Fase 0:** los horarios de ferry (punto 5) **no se pudieron recopilar**.
 Las tres navieras publican sus horarios en imágenes y tablas generadas por JavaScript, no

@@ -400,3 +400,49 @@ struct SavedJourneyOnMapTests {
         #expect(state.origin?.label == "Casa")
     }
 }
+
+/// Guardar como trayecto lo que hay en la hoja de ruta.
+@Suite("Extremos de un trayecto por guardar")
+struct SavedEndpointInputFromMapPlaceTests {
+
+    private let here = Coordinate(latitude: 42.2328, longitude: -8.7226)
+
+    /// El importador borra y reescribe la tabla `stop` entera cada semana, así que guardar el
+    /// `Stop` sería guardar algo que caduca. Se guarda el id y una coordenada de respaldo.
+    @Test("Una parada se guarda por su id, con coordenada de respaldo")
+    func stopIsStoredByID() {
+        let stop = PlannerFixture.stop("6930", name: "Rúa do Areal")
+        let input = MapPlace.stop(stop).savedEndpointInput
+
+        #expect(input.placeID == nil, "una parada suelta no está enlazada a ningún lugar guardado")
+        #expect(input.name == "Rúa do Areal")
+        if case .stopID(let id, let fallback) = input.anchor {
+            #expect(id == stop.id)
+            #expect(fallback == Coordinate(stop), "sin esto, un feed nuevo dejaría el trayecto inservible")
+        } else {
+            Issue.record("una parada tiene que anclarse por id, no por coordenada")
+        }
+    }
+
+    /// Enlazado, no copiado: renombrar "Casa" más tarde tiene que renombrarlo también aquí.
+    @Test("Un lugar guardado se queda enlazado")
+    func savedPlaceStaysLinked() {
+        let id = SavedPlaceID("p1")
+        let place = MapPlace(place: .coordinate(here, label: "Casa"),
+                             subtitle: nil, origin: .savedPlace(id))
+        #expect(place.savedEndpointInput.placeID == id)
+        #expect(place.savedEndpointInput.name == "Casa")
+    }
+
+    @Test("Una dirección o un punto suelto son extremos ad hoc")
+    func adHocEndpointsAreNotLinked() {
+        for origin in [MapPlace.Origin.address, .droppedPin, .pointOfInterest, .currentLocation] {
+            let place = MapPlace(place: .coordinate(here, label: "X"), subtitle: nil, origin: origin)
+            #expect(place.savedEndpointInput.placeID == nil,
+                    "no hay lugar guardado al que enlazarse")
+            if case .coordinate = place.savedEndpointInput.anchor {} else {
+                Issue.record("sin parada detrás, el ancla es la coordenada")
+            }
+        }
+    }
+}

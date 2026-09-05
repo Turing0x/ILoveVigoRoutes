@@ -26,6 +26,7 @@ struct MapRouteSheet: View {
     /// button that did nothing; it is now the map's own search sheet, so both ways into a
     /// place — the search bar and this row — land on the same list.
     @State private var editing: PlacePickerRole?
+    @State private var saving = false
 
     var body: some View {
         NavigationStack {
@@ -52,6 +53,27 @@ struct MapRouteSheet: View {
                 }
 
                 results
+
+                // Last, not first: the point of this sheet is the answer above it, and a
+                // journey is worth saving once you have seen that it is the right one.
+                if let origin = state.origin, let destination = state.destination {
+                    Section {
+                        Button {
+                            saving = true
+                        } label: {
+                            Label("Guardar este trayecto",
+                                  systemImage: "arrow.triangle.turn.up.right.diamond")
+                        }
+                    } footer: {
+                        Text("Se guarda el par origen–destino, no el autobús concreto: al abrirlo se vuelve a calcular con los horarios del momento.")
+                    }
+                    .sheet(isPresented: $saving) {
+                        SavedJourneyEditorView(mode: .createFrom(
+                            origin: origin.savedEndpointInput, originName: origin.label,
+                            destination: destination.savedEndpointInput,
+                            destinationName: destination.label))
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Cómo llegar")

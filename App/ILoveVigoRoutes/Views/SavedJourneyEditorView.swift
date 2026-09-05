@@ -8,6 +8,12 @@ struct SavedJourneyEditorView: View {
 
     enum Mode {
         case create
+        /// Creating with both ends already known — saving the route currently on the map.
+        ///
+        /// A separate case rather than a `create` with optional arguments so `canSave` can
+        /// keep meaning "both ends are set" without a second way of being half-filled.
+        case createFrom(origin: SavedEndpointInput, originName: String,
+                        destination: SavedEndpointInput, destinationName: String)
         case edit(SavedJourney)
     }
 
@@ -32,6 +38,12 @@ struct SavedJourneyEditorView: View {
             _originSummary = State(initialValue: "")
             _destinationInput = State(initialValue: nil)
             _destinationSummary = State(initialValue: "")
+        case .createFrom(let origin, let originName, let destination, let destinationName):
+            _customLabel = State(initialValue: "")
+            _originInput = State(initialValue: origin)
+            _originSummary = State(initialValue: originName)
+            _destinationInput = State(initialValue: destination)
+            _destinationSummary = State(initialValue: destinationName)
         case .edit(let journey):
             _customLabel = State(initialValue: journey.customLabel ?? "")
             _originInput = State(initialValue: nil)
@@ -41,7 +53,12 @@ struct SavedJourneyEditorView: View {
         }
     }
 
-    private var isCreating: Bool { if case .create = mode { true } else { false } }
+    private var isCreating: Bool {
+        switch mode {
+        case .create, .createFrom: true
+        case .edit: false
+        }
+    }
 
     private var canSave: Bool {
         !isCreating || (originInput != nil && destinationInput != nil)
@@ -110,7 +127,7 @@ struct SavedJourneyEditorView: View {
     private func save() {
         let trimmed = customLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         switch mode {
-        case .create:
+        case .create, .createFrom:
             guard let originInput, let destinationInput else { return }
             environment.savedPlaces.createJourney(
                 customLabel: trimmed.isEmpty ? nil : trimmed,

@@ -934,7 +934,8 @@ resultado.
 Sigue viva **a propósito**, tal como el propietario pidió: primero que el mapa funcione, luego
 se borra. Este es el criterio, para que la decisión no dependa de la memoria de nadie.
 
-**Lista de paridad.** Se borra cuando las once estén comprobadas en dispositivo:
+**Lista de paridad: los once puntos están implementados.** Falta solo comprobarlos en
+dispositivo; hasta entonces la pestaña se queda.
 
 1. Origen por ubicación que sigue al GPS hasta que se toca. ✅ implementado
 2. Origen y destino intercambiables. ✅
@@ -946,9 +947,36 @@ se borra. Este es el criterio, para que la decisión no dependa de la memoria de
 7. Detalle por tramos. ✅ (`JourneyDetailView`, reutilizada sin tocar)
 8. Trazado real en el mapa. ✅
 9. Tiempo real del primer embarque. ✅
-10. Guardar el trayecto planificado. ⬜ **el único hueco**: la ficha guarda *lugares*, pero
-    todavía no hay "guardar este trayecto" en la hoja de ruta.
+10. Guardar el trayecto planificado. ✅
 11. Empujar a `JourneyMapView`. ✅ (desde `JourneyDetailView`)
+
+- [x] **Guardar un trayecto desde la hoja de ruta** — cerraba el único hueco de la lista.
+  `VigoCore/MapFlow/MapPlace.swift` gana `savedEndpointInput`;
+  `App/ILoveVigoRoutes/Views/SavedJourneyEditorView.swift` gana un modo `.createFrom` con los
+  dos extremos ya puestos; `Map/MapRouteSheet.swift` añade el botón.
+  Tests: `SavedEndpointInputFromMapPlaceTests` (3, en `MapNavigationStateTests.swift`).
+
+  `.createFrom` es un caso propio y no un `.create` con argumentos opcionales, para que
+  `canSave` siga significando "los dos extremos están puestos" sin una segunda manera de
+  quedarse a medias.
+
+  La conversión de `MapPlace` a extremo guardado respeta las dos reglas que la Fase 4 fijó y
+  que solo se notan tras una reimportación: una parada se guarda por **`stopID` más coordenada
+  de respaldo**, nunca como un `Stop` —el importador reescribe esa tabla entera cada semana—, y
+  un extremo que venía de un lugar guardado se queda **enlazado**, de modo que renombrar "Casa"
+  más tarde lo renombra también aquí. Todo lo demás (una dirección, un punto pulsado, un POI)
+  es ad hoc por definición: no hay lugar guardado al que seguir.
+
+  El botón va **el último** de la hoja, no el primero: lo que se ha venido a ver son las
+  alternativas, y un trayecto merece guardarse una vez comprobado que es el bueno. El pie dice
+  en voz alta qué se guarda —el par origen–destino, no el autobús concreto— porque guardar "el
+  17 de las 9:02" sería una promesa que el horario no puede repetir mañana.
+
+  **Verificado por mutación, tres veces:** (1) una parada anclada por coordenada en vez de por
+  id; (2) un lugar guardado que deja de estar enlazado; (3) todo enlazado a un lugar inventado.
+  Las tres tumban tests.
+
+  Suite de `VigoCore`: **265 tests en verde** (+3).
 
 **Cuando las once estén:** quitar `.planner` de `AppTab`, borrar `PlannerView.swift` y
 `App/ILoveVigoRoutesTests/PlannerModelTests.swift`. `PlacePickerView` **sobrevive**: la usa
@@ -970,8 +998,8 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **262 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +68 en la
+Al escribir este documento: **265 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +71 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
 `JourneySummaryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
