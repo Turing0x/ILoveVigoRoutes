@@ -57,9 +57,3 @@ final class MapKitPlaceResolver: MapPlaceResolving {
         return "\(street), \(number)"
     }
 }
-
-/// Needed by `MapRouteSheet`, which presents its endpoint search with `.sheet(item:)`.
-/// `PlacePickerRole` itself belongs to the planner tab and outlives this use.
-extension PlacePickerRole: Identifiable {
-    var id: Self { self }
-}

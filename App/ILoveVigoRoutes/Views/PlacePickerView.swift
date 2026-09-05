@@ -20,12 +20,6 @@ struct PickedPlace {
     }
 }
 
-/// Which end of a journey this picker is filling in, so it knows which side of a saved
-/// journey to offer as a shortcut. `nil` (the default) means the picker is being used for
-/// something other than the planner's origin/destination — e.g. picking a saved place's own
-/// anchor — where a saved journey's endpoints would not make sense to offer.
-enum PlacePickerRole { case origin, destination }
-
 /// Picks an origin or a destination: current location, a saved place, a saved journey's
 /// endpoint, a favourite stop, a search result, or a point tapped on the map.
 struct PlacePickerView: View {
