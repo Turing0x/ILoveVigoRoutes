@@ -17,6 +17,7 @@ struct MapRouteSheet: View {
     let onPick: (PlacePickerRole, MapPlace) -> Void
     let onSwap: () -> Void
     let onDeparture: (MapNavigationState.Departure) -> Void
+    let onOrdering: (JourneyOrdering) -> Void
     let onRefresh: () async -> Void
     let onSelect: (Int) -> Void
     let onOpen: () -> Void
@@ -203,9 +204,9 @@ struct MapRouteSheet: View {
             }
         } else if let message = state.route.failure.flatMap({ PlanOutcomeMessage.failure($0) }) {
             Section { Text(message).font(.subheadline) }
-        } else if !state.route.journeys.isEmpty {
+        } else if !state.visibleJourneys.isEmpty {
             Section {
-                ForEach(Array(state.route.journeys.enumerated()), id: \.offset) { index, journey in
+                ForEach(Array(state.visibleJourneys.enumerated()), id: \.offset) { index, journey in
                     let gone = FirstBoardingMatch.hasDeparted(journey, now: now)
                     Button {
                         // Tapping the highlighted one again opens it. Tapping another
@@ -232,7 +233,12 @@ struct MapRouteSheet: View {
                                        ? Color.indigo.opacity(0.12) : nil)
                 }
             } header: {
-                Text(state.route.isWalkOnly ? "A pie" : "Alternativas (\(state.route.journeys.count))")
+                HStack {
+                    Text(state.route.isWalkOnly
+                         ? "A pie" : "Alternativas (\(state.visibleJourneys.count))")
+                    Spacer()
+                    if !state.route.isWalkOnly { orderingMenu }
+                }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if state.route.isWalkOnly {
@@ -244,6 +250,30 @@ struct MapRouteSheet: View {
                 }
             }
         }
+    }
+
+    /// A menu and not a segmented picker, for the reason already written for the departure
+    /// control: in a sheet the horizontal space is the scarce resource, and three labels of
+    /// this length would not fit across a small iPhone.
+    private var orderingMenu: some View {
+        Menu {
+            ForEach(JourneyOrdering.allCases, id: \.self) { candidate in
+                Button {
+                    onOrdering(candidate)
+                } label: {
+                    if candidate == state.ordering {
+                        Label(candidate.label, systemImage: "checkmark")
+                    } else {
+                        Label(candidate.label, systemImage: candidate.symbolName)
+                    }
+                }
+            }
+        } label: {
+            Label(state.ordering.label, systemImage: "arrow.up.arrow.down")
+                .font(.caption)
+                .textCase(nil)
+        }
+        .accessibilityLabel("Ordenar por: \(state.ordering.label)")
     }
 
     /// How old the answer is, or `nil` when saying so would be noise.

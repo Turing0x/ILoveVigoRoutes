@@ -42,6 +42,24 @@ final class MapScreenModel {
 
     static let stopsVisibleKey = "map.stopsVisible"
 
+    /// How the alternatives are ordered, remembered between launches.
+    ///
+    /// `UserDefaults` and not the database, by the line this project already draws: a trivial
+    /// presentation preference with no relation to the user's data goes here (as
+    /// `map.stopsVisible` does), and things the user creates, edits, reorders and deletes go to
+    /// SQLite. An ordering criterion is the first kind.
+    var ordering: JourneyOrdering {
+        get { state.ordering }
+        set {
+            guard newValue != state.ordering else { return }
+            state.setOrdering(newValue)
+            defaults.set(newValue.rawValue, forKey: Self.orderingKey)
+            Task { await rebuildTraces() }
+        }
+    }
+
+    static let orderingKey = "route.ordering"
+
     private var viewport: MapStopsLayer.Viewport?
 
     init(repository: TransitRepository,
@@ -53,6 +71,12 @@ final class MapScreenModel {
         self.resolver = resolver
         self.defaults = defaults
         self.stopsVisible = defaults.bool(forKey: Self.stopsVisibleKey)
+        // An unwritten key, or one holding a criterion a later version removed, falls back to
+        // the default rather than to whatever `rawValue` happens to be first.
+        if let stored = defaults.string(forKey: Self.orderingKey),
+           let restored = JourneyOrdering(rawValue: stored) {
+            state.setOrdering(restored)
+        }
     }
 
     // MARK: - Paradas
@@ -302,11 +326,19 @@ final class MapScreenModel {
             ? drawn.traces[state.selectedAlternative] : []
     }
 
+    /// Rebuilds what the map draws from the journeys already planned.
+    ///
+    /// Needed when the visible set changes without a new answer — which is what changing the
+    /// ordering does. It never re-plans: the criterion is presentation.
+    private func rebuildTraces() async {
+        await redraw()
+    }
+
     /// Replaces what the map draws with the result that just came in.
     ///
     /// The single writer of `drawn`, so its two halves cannot drift apart.
     private func redraw() async {
-        let journeys = state.route.journeys
+        let journeys = state.visibleJourneys
         guard !journeys.isEmpty else {
             drawn = DrawnRoute()
             return
