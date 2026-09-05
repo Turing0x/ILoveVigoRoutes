@@ -64,6 +64,21 @@ public enum FirstBoardingMatch {
         return nil
     }
 
+    /// Whether the bus this journey boards has already left.
+    ///
+    /// **Measured against the boarding, not against `Journey.departure`.** The two are
+    /// different instants and only one of them is the bus: `departure` is when the passenger
+    /// would have to start *walking* towards the stop, which is earlier by the whole access
+    /// leg. Comparing against it would call a journey gone while its bus is still minutes
+    /// away — and it is the same distinction the ordering criteria have to make between
+    /// "sale antes" and the moment the front door closes.
+    ///
+    /// A walk-only journey never departs: there is no vehicle to miss, so it is always false.
+    public static func hasDeparted(_ journey: Journey, now: Date) -> Bool {
+        guard let ride = firstRide(of: journey) else { return false }
+        return now > ride.departure
+    }
+
     private static func distance(_ arrival: Arrival, from departure: Date, now: Date) -> TimeInterval {
         let implied = now.addingTimeInterval(TimeInterval(arrival.minutes * 60))
         return abs(implied.timeIntervalSince(departure))
