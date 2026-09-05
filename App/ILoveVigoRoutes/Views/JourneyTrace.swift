@@ -2,9 +2,19 @@ import SwiftUI
 import MapKit
 import VigoCore
 
-/// The stretch of a trip's shape that a passenger actually rides, one per ride leg.
+/// One drawable stretch of a journey: the part of a trip's shape actually ridden, or the
+/// straight line of a leg walked.
 struct JourneyTrace: Identifiable, Sendable {
+    enum Kind: Sendable, Equatable {
+        /// Follows the real streets, from `shapePoint`.
+        case ride
+        /// A straight line, drawn dashed because that is exactly what it is. See
+        /// `WalkSegment` for why there is no pedestrian routing behind it.
+        case walk
+    }
+
     let id: Int
+    let kind: Kind
     let coordinates: [CLLocationCoordinate2D]
 }
 
@@ -30,9 +40,22 @@ enum JourneyTraceBuilder {
             }
             found.append(JourneyTrace(
                 id: index,
+                kind: .ride,
                 coordinates: trim(coordinates,
                                   boardCoordinate: Coordinate(board),
                                   alightCoordinate: Coordinate(alight))))
+        }
+
+        // The walks, after the rides and with ids that cannot collide with a leg index.
+        //
+        // Which legs are walked, and in what direction, is decided by `Journey.walkSegments`
+        // in `VigoCore` — a pure function `swift test` covers on the Mac, unlike everything
+        // above it here, which needs SQLite.
+        for (offset, segment) in journey.walkSegments.enumerated() {
+            found.append(JourneyTrace(
+                id: journey.legs.count + offset,
+                kind: .walk,
+                coordinates: [segment.from.clLocation, segment.to.clLocation]))
         }
         return found
     }
@@ -108,8 +131,19 @@ struct JourneyMapContent: MapContent {
 
     var body: some MapContent {
         ForEach(traces) { trace in
-            MapPolyline(coordinates: trace.coordinates)
-                .stroke(.indigo, lineWidth: 4)
+            switch trace.kind {
+            case .ride:
+                MapPolyline(coordinates: trace.coordinates)
+                    .stroke(.indigo, lineWidth: 4)
+            case .walk:
+                // Dashed, and the same indigo: it is the same journey, not another thing.
+                // The dashes are the honest part — this is a straight line between two
+                // points, not a pavement, and a solid stroke would promise a route across
+                // whatever happens to lie between them.
+                MapPolyline(coordinates: trace.coordinates)
+                    .stroke(.indigo.opacity(0.75),
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [1, 9]))
+            }
         }
         // The chain always opens and closes with a walk leg — into the network from the
         // real origin, and out of it to the real destination — so these two are always
