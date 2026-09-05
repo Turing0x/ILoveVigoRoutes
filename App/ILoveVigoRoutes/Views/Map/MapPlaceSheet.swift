@@ -14,6 +14,12 @@ struct MapPlaceSheet: View {
     @Environment(AppEnvironment.self) private var environment
     let place: MapPlace
     let distanceText: String?
+    /// Why routing is unavailable right now, or `nil` when it is available.
+    ///
+    /// A disabled button with no reason next to it is a dead end; the two states this can
+    /// hold — the feed still importing, and no position with no origin pinned — are both
+    /// temporary and both worth naming.
+    let routeBlockedReason: String?
     let onRoute: () -> Void
     let onClose: () -> Void
 
@@ -30,6 +36,11 @@ struct MapPlaceSheet: View {
                     Button(action: onRoute) {
                         Label("Cómo llegar", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                             .font(.headline)
+                    }
+                    .disabled(routeBlockedReason != nil)
+                } footer: {
+                    if let routeBlockedReason {
+                        Text(routeBlockedReason)
                     }
                 }
 

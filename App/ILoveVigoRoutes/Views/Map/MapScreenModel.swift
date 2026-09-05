@@ -171,6 +171,21 @@ final class MapScreenModel {
     private(set) var traces: [[JourneyTrace]] = []
     private(set) var planningFailure: String?
 
+    /// Why "Cómo llegar" cannot run yet, or `nil` when it can.
+    ///
+    /// Read before the fact rather than after: the alternative is a button that looks live,
+    /// spins, and then explains itself. The feed check mirrors what `JourneyPlanner` would
+    /// answer with `.noData`, said early.
+    var routeBlockedReason: String? {
+        if allStops.isEmpty {
+            return "Todavía se están descargando los horarios del Concello."
+        }
+        if state.currentLocation == nil && state.origin == nil {
+            return "Necesito saber desde dónde sales. Activa la ubicación o elige un origen."
+        }
+        return nil
+    }
+
     /// "Cómo llegar" on the selected place.
     func routeToSelectedPlace() async {
         guard state.routeToSelectedPlace() else {

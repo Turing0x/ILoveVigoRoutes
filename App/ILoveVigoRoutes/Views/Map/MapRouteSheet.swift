@@ -41,7 +41,14 @@ struct MapRouteSheet: View {
                             .font(.subheadline)
                     }
                 } footer: {
-                    departurePicker
+                    VStack(alignment: .leading, spacing: 6) {
+                        departurePicker
+                        if state.origin == nil {
+                            // The origin is normally filled in by the device. When it is not,
+                            // saying so beats an empty row the user has to guess about.
+                            Text("Sin ubicación no puedo poner el origen por ti. Tócalo para elegirlo.")
+                        }
+                    }
                 }
 
                 results

@@ -42,7 +42,10 @@ struct JourneyAlternativeRow: View {
             }
         }
         .padding(.vertical, 3)
-        .accessibilityElement(children: .combine)
+        // `.combine` alone reads the stack as it happens to be laid out: two bare times, a
+        // number, and a line badge that is a digit with no noun in front of it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(JourneySummary.spoken(journey, live: live))
     }
 
     private var durationText: String {

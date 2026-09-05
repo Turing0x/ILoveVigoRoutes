@@ -118,6 +118,18 @@ impida confundirlos.
 | Fase 2 — Ferry de la ría | No iniciada |
 | **Fase 3** — Planificador de rutas | **Completa** (solo bus; el ferry entra cuando exista la Fase 2) |
 | Fase 4 — Pulido y comodidades | **Parcial**: lugares y trayectos guardados (CRUD completo), refresco del GTFS en segundo plano, orden de pestañas y estrella de favorito unificada. Quedan fuera, por decisión: widget de pantalla de inicio, atajos de Siri, accesibilidad exhaustiva |
+| **Fase 5** — El mapa como planificador | **Completa** (a falta de la comprobación en dispositivo del propietario) |
+
+### Fase 5 — el mapa es el planificador
+
+El mapa dejó de ser un visor de paradas. Desde él se puede seleccionar **cualquier sitio** —una
+parada, un punto de interés de Apple Maps, un punto cualquiera manteniéndolo pulsado, o un
+resultado de búsqueda—, pedir "Cómo llegar" y ver hasta cuatro alternativas con sus horas, sus
+trazados reales y el tiempo real del primer embarque, sin salir de la pantalla. Y las paradas
+pasaron a ser una capa **apagada por defecto**: el mapa arranca limpio.
+
+La pestaña "Planificar" sigue viva a propósito hasta completar la lista de paridad de once
+puntos que `ESTADO.md` deja escrita; hoy falta uno (guardar el trayecto desde la hoja de ruta).
 
 **Punto abierto de la Fase 0:** los horarios de ferry (punto 5) **no se pudieron recopilar**.
 Las tres navieras publican sus horarios en imágenes y tablas generadas por JavaScript, no

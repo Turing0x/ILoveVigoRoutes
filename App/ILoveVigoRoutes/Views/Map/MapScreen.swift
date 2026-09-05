@@ -22,6 +22,9 @@ struct MapScreen: View {
         span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)))
     @State private var selection: MapSelection<StopID>?
     @State private var live: FirstBoardingLive?
+    /// Camera moves are animated by MapKit unless told otherwise. Someone who has asked the
+    /// system for less motion has asked for exactly this kind of less.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Where the finger is, updated by a simultaneous drag that never consumes the gesture.
     /// `LongPressGesture` cannot report a location on its own; this is the recipe the Fase 5
     /// spike confirmed on device, panning and zooming intact.
@@ -192,6 +195,7 @@ struct MapScreen: View {
         case .place(let place):
             MapPlaceSheet(place: place,
                           distanceText: model.distanceText(to: place),
+                          routeBlockedReason: model.routeBlockedReason,
                           onRoute: { Task { await model.routeToSelectedPlace() } },
                           onClose: { dismissSheet(model) })
 
@@ -236,7 +240,7 @@ struct MapScreen: View {
         guard !journeys.isEmpty else { return }
         let region = JourneyTraceBuilder.region(for: journeys, traces: traces)
         let lift = region.span.latitudeDelta * sheetFraction / 2
-        camera = .region(MKCoordinateRegion(
+        move(to: MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: region.center.latitude - lift,
                                            longitude: region.center.longitude),
             span: region.span))
@@ -265,10 +269,22 @@ struct MapScreen: View {
     private func focus(on place: MapPlace) {
         let span = MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
         let lift = span.latitudeDelta * sheetFraction / 2
-        camera = .region(MKCoordinateRegion(
+        move(to: MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: place.coordinate.latitude - lift,
                                            longitude: place.coordinate.longitude),
             span: span))
+    }
+
+    /// Every camera move goes through here so the reduce-motion rule is applied once instead
+    /// of being remembered at each call site.
+    private func move(to region: MKCoordinateRegion) {
+        guard reduceMotion else {
+            camera = .region(region)
+            return
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { camera = .region(region) }
     }
 
     /// Only ever shown for "too many to draw". An empty patch of map gets no hint, because

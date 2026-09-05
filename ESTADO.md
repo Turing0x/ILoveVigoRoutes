@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 8/11 pasos. Con tiempo real en las alternativas |
+| **Fase 5 — El mapa como planificador** | ✅ Completa. Falta comprobación en dispositivo del propietario |
 
 ---
 
@@ -866,6 +866,96 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   las que no casan no muestren nada en absoluto; y que el detalle del trayecto siga anotando
   igual que antes de este paso.
 
+- [x] **8/11 — Estados de borde y accesibilidad**
+  `VigoCore/Sources/VigoCore/MapFlow/JourneySummary.swift` (nuevo);
+  `App/ILoveVigoRoutes/Views/JourneyRows.swift`, `Map/MapPlaceSheet.swift`,
+  `Map/MapRouteSheet.swift`, `Map/MapScreen.swift` y `Map/MapScreenModel.swift` modificados.
+  Tests: `JourneySummaryTests.swift` (7).
+
+  **VoiceOver.** `JourneyAlternativeRow` ya se colapsaba en un solo elemento, pero sin
+  etiqueta propia se leía la pila tal como estaba puesta: dos horas sueltas, un número, y una
+  insignia de línea que es un dígito sin sustantivo delante ("17"). `JourneySummary.spoken`
+  arma la frase que diría una persona —"Sale a las 15:33, llega a las 15:51, 18 minutos,
+  directo, línea 17."— con singulares y plurales correctos. Está en `VigoCore` y recibe
+  locale y zona horaria como parámetros, así que se comprueba con `swift test` en vez de
+  quedar para mirarlo en el dispositivo.
+  La **procedencia del tiempo real va dentro de la frase** ("en vivo" / "estimado"): la
+  insignia que la muestra no tiene texto propio, así que sin eso quien usa VoiceOver no puede
+  distinguir un vehículo seguido de una estimación. Y sin anotación no se insinúa que la haya.
+
+  **"Cómo llegar" se deshabilita con su motivo a la vista**, no en silencio: mientras el feed
+  se está importando, y cuando no hay ni ubicación ni origen elegido. Se comprueba **antes**
+  de pulsar, en vez de dejar que el botón parezca vivo, gire y luego se explique.
+
+  **Reduce-motion.** Todos los movimientos de cámara pasan ahora por un único `move(to:)` que
+  desactiva la animación cuando el sistema la ha pedido reducida. Uno solo, en vez de
+  acordarse en cada sitio que mueve la cámara.
+
+  **Sin ubicación**, la hoja de ruta lo dice en su pie en lugar de dejar una fila vacía que el
+  usuario tenga que adivinar. El mapa sigue abriendo en Praza de América, que nunca se
+  presenta como la posición del usuario.
+
+  **Verificado por mutación, siete veces:** (1) la línea leída como número suelto; (2) la
+  procedencia del tiempo real desaparecida; (3) un trayecto a pie hablando de líneas y horas;
+  (4) transbordo siempre en plural; (5) minuto siempre en plural; (6) duración negativa leída
+  tal cual; (7) solo la primera línea nombrada en un trayecto con transbordo. Las siete tumban
+  tests — la (7) tras reescribirla, porque la primera versión no compilaba.
+
+  Suite de `VigoCore`: **262 tests en verde** (+7). Debug y Release compilan.
+
+- [x] **9/11 — Documentación y criterio de retirada**
+  `ESTADO.md`, `README.md`.
+  Los pasos 10 y 11 del plan se funden aquí: escribir el estado y dejar por escrito **cuándo**
+  se puede borrar la pestaña "Planificar" es el mismo trabajo, y separarlos habría sido un
+  commit de una línea.
+
+**Fase 5 completa — 9 pasos.** El mapa es el planificador: selección universal (parada, POI de
+Apple, punto mantenido pulsado, búsqueda), ruta con hasta cuatro alternativas, trazados,
+detalle por tramos, navegación, tiempo real del primer embarque, y las paradas convertidas en
+una capa apagada por defecto. Commits `5c5ce4c`..`HEAD` en `main`.
+
+**Lo que esta fase deja anotado sobre cómo se ha verificado.** Desde el paso 0 el propietario
+prueba **solo en dispositivo**, sin simulador. Eso ha empujado casi toda la lógica nueva a
+`VigoCore` —máquina de estados, mensajes, capa de paradas, etiquetas, encuadre, cruce con
+tiempo real, resumen hablado— donde `swift test` la cubre en el Mac. No fue una concesión: la
+partición cayó donde ya estaba la costura, y lo que se quedó en el target de app es justo lo
+que no es función pura del estado.
+Se aplicaron **48 mutaciones deliberadas** a lo largo de la fase. **Tres pasaron
+desapercibidas** y obligaron a reforzar la red de pruebas antes de seguir: media anchura del
+recuadro sin dividir (paso 3), mirar solo el primero y el último punto al calcular límites
+(paso 5), y —fuera de la cuenta— un fallo del propio arnés, que contaba un error de
+compilación como mutación indetectada (paso 4). El patrón se repitió lo bastante como para
+dejarlo escrito: **un test con datos cómodos no ve la mitad de los fallos**; en los tres casos
+el dato de prueba estaba tan lejos del borde que romper la aritmética no cambiaba el
+resultado.
+
+## Retirada de la pestaña "Planificar"
+
+Sigue viva **a propósito**, tal como el propietario pidió: primero que el mapa funcione, luego
+se borra. Este es el criterio, para que la decisión no dependa de la memoria de nadie.
+
+**Lista de paridad.** Se borra cuando las once estén comprobadas en dispositivo:
+
+1. Origen por ubicación que sigue al GPS hasta que se toca. ✅ implementado
+2. Origen y destino intercambiables. ✅
+3. Salida "ahora" y a una hora concreta. ✅
+4. Elegir extremo: ubicación, parada favorita, búsqueda de parada, dirección, punto del mapa,
+   lugar guardado, trayecto guardado. ✅
+5. Hasta 4 alternativas con horas, duración y transbordos. ✅
+6. Los 8 casos de `PlanOutcome` con su texto. ✅ (`PlanOutcomeMessage`, compartido)
+7. Detalle por tramos. ✅ (`JourneyDetailView`, reutilizada sin tocar)
+8. Trazado real en el mapa. ✅
+9. Tiempo real del primer embarque. ✅
+10. Guardar el trayecto planificado. ⬜ **el único hueco**: la ficha guarda *lugares*, pero
+    todavía no hay "guardar este trayecto" en la hoja de ruta.
+11. Empujar a `JourneyMapView`. ✅ (desde `JourneyDetailView`)
+
+**Cuando las once estén:** quitar `.planner` de `AppTab`, borrar `PlannerView.swift` y
+`App/ILoveVigoRoutesTests/PlannerModelTests.swift`. `PlacePickerView` **sobrevive**: la usa
+`SavedPlaceEditorView`, aunque podrá adelgazarse. Ese trabajo es una sesión corta y no es esta
+fase.
+
+
 
 
 
@@ -880,10 +970,11 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **255 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +61 en la
+Al escribir este documento: **262 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +68 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
-`MapPlaceLabelsTests`, `CoordinateBoundsTests` y `FirstBoardingMatchTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+`MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
+`JourneySummaryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
 
