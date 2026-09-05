@@ -18,6 +18,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 6 — Retirada de lo viejo** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Fase 7 — Un solo buscador, dos pestañas** | ✅ Hecha y fusionada a `main` |
 | **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha y comprobada en dispositivo |
+| **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -1228,12 +1229,13 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **278 tests de `VigoCore` en verde** (170 antes de la Fase 4;
+Al escribir este documento: **291 tests de `VigoCore` en verde** (170 antes de la Fase 4;
 +24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +71 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
 `JourneySummaryTests`; +5 en la Fase 8 entre `JourneyWalkSegmentsTests` y la ampliación de
-`FirstBoardingMatchTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+`FirstBoardingMatchTests`; +13 en la Fase 9 entre `DepartureBoardTests` y
+`LineTimetableQueryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **16 tests del target de app** (eran 23 hasta que la Fase 6 se llevó
 `PlannerModelTests` con la pestaña que probaba; la cifra de 17 que este documento citaba
 después de la Fase 6 no coincide con lo que arroja `xcodebuild test` hoy — ni `PlacePickerView`
@@ -1245,3 +1247,87 @@ verifica con `swift test` (que corre en el Mac) y con compilación contra
 `generic/platform=iOS`; los tests del target de app requieren simulador y por tanto los
 ejecuta él. Es la razón por la que la lógica nueva del mapa vive en `VigoCore` y no en la
 app.
+
+## Fase 9 — Todos los horarios de una línea en una parada
+
+Plan en `PLAN-FASES-8-13.md`, §Fase 9. La otra mitad de "¿y el siguiente?": la Fase 8 vuelve a
+preguntar por ti, esta enseña la tabla entera para que no haga falta preguntar. El caso que la
+motiva, tal cual lo dio el propietario: Reiseñor 12 → Alcampo devuelve C3D, 15A, 4C y **otra vez
+C3D**, dos alternativas de la misma línea a horas distintas — exactamente lo que una tabla de
+horarios colapsa en una sola lista legible.
+
+### Hecho
+
+- [x] **1/2 — La consulta, `DepartureBoard` y `serviceDays`, en `VigoCore`**
+  `VigoCore/Sources/VigoCore/Departures/DepartureBoard.swift` (nuevo),
+  `Persistence/TransitRepository.swift`; tests en `DepartureBoardTests.swift` (6) y
+  `LineTimetableQueryTests.swift` (7).
+
+  `scheduledDepartures(stopID:routeID:on:)` es la hermana de la que ya existía. Aquella contesta
+  "qué viene pronto" —todas las líneas, tres horas, treinta filas—; esta contesta "cuándo pasa
+  esta línea por aquí", que necesita el día entero y no lleva tope: una línea cargada son 60–80
+  filas.
+
+  Pide **los dos días de servicio**, no solo el que se nombra. Un viaje que sale a las 25:10
+  pertenece al día de servicio anterior pero ocurre a la 01:10 de este, y quien lee la tabla lo
+  espera bajo el día en que estará en la parada. El fixture ya traía ese caso desde la Fase 0
+  (`T_NIGHT_1`), así que el test no hubo que inventarlo.
+
+  `DepartureBoard` separa los sentidos y marca la siguiente. Lo primero es la diferencia entre
+  una tabla y una lista de números: una parada servida en las dos direcciones, en una sola
+  columna, no significa nada. Lo segundo es que "la siguiente" es la primera **posterior a
+  `now`** y no la primera de la lista — a las 20:00 la cabeza de la tabla es el autobús de las 6
+  de la mañana.
+
+  `FeedStatus.serviceDays` da los días que el feed puede contestar. No es lo mismo que siete días
+  desde hoy, y a veces es lo contrario: el feed real descargado el 2026-09-04 reportaba ventana
+  20260905–20260911, que **empieza mañana**, así que hasta "hoy" puede caer fuera.
+
+  **Verificado por mutación, seis veces:** (1) preguntar solo por el día nombrado; (2) sin filtro
+  por línea; (3) bordes con 86400 fijo en vez de medianoches reales; (4) los días del selector
+  desde el reloj; (5) la siguiente como la primera de la lista; (6) los dos sentidos en una
+  columna.
+
+  **La (3) pasó desapercibida**, y es la cuarta vez que este proyecto anota el mismo patrón: el
+  fixture vive entero en septiembre y no cruza ningún cambio de hora, así que 86400 y la
+  distancia real entre dos medianoches coinciden siempre. Añadido un feed mínimo alrededor del
+  **domingo 25 de octubre de 2026**, que dura 25 horas: una salida a las 24:30 de ese día ocurre
+  media hora antes de la medianoche del 26 y pertenece a la tabla del 25; con 86400 fijo se cae
+  de esa tabla y aparece un día tarde. Con ese test, la (3) tumba tres.
+
+  De paso, un test asertaba `ServiceTime.seconds` creyendo que eran los segundos del día. Son los
+  del minuto, y compilaba igual diciendo otra cosa; pasa a asertar sobre el instante.
+
+- [x] **2/2 — `LineTimetableView` y el enlace desde el tramo en bus**
+  `App/ILoveVigoRoutes/Views/LineTimetableView.swift` (nuevo, incluye `FeedCoverageNote`),
+  `Views/JourneyRows.swift`.
+
+  Alcance a propósito: **una línea, una parada, un día**, y no la tabla completa de la línea en
+  todas sus paradas. Eso es un horario impreso, no una respuesta; lo que resuelve la duda real
+  ("¿cuándo pasa el siguiente por *aquí*?") es la columna de esta parada.
+
+  Secciones por sentido, la próxima salida marcada y la lista abierta ya desplazada hasta ella.
+  Selector de día acotado a `serviceDays`, que arranca en hoy solo si el feed lo cubre. Arriba,
+  el tiempo real de esa línea filtrado por nombre normalizado, reutilizando la misma llamada a
+  `ArrivalsService` que ya hacen `StopDetailView` y la ficha del mapa: **ni un tipo de petición
+  nuevo**, y con el límite de 20 s intacto por debajo.
+
+  La lectura va fuera del actor principal, como el resto de consultas de esta app: 60–80 filas de
+  SQLite sin punto de suspensión propio donde ceder.
+
+  El fichero nuevo hubo que **darlo de alta a mano en `project.pbxproj`** (cuatro sitios: build
+  file, file reference, grupo y fase de compilación). El proyecto no usa grupos sincronizados con
+  el sistema de ficheros, así que un `.swift` nuevo no entra solo y el error que da —"cannot find
+  X in scope"— no apunta a la causa.
+
+**Fase 9 completa — 2 pasos.** Suite de `VigoCore`: **291 tests en verde** (+13). Target de app:
+**16 tests en verde**, sin cambios. Debug y Release compilan contra `generic/platform=iOS`.
+
+**Pendiente de comprobar en dispositivo** (lo hace el propietario):
+
+- [ ] Desde un tramo en bus se llega a los horarios de esa línea en esa parada
+- [ ] La lista abre por la próxima salida, no por las 6 de la mañana
+- [ ] Una parada con los dos sentidos: dos secciones, no una columna mezclada
+- [ ] Una línea nocturna: las salidas de después de medianoche aparecen en el día correcto
+- [ ] El selector de día solo ofrece los días que el feed cubre
+- [ ] La tabla se lee de un vistazo en la pantalla del iPhone
