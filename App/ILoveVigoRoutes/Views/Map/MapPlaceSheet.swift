@@ -24,6 +24,7 @@ struct MapPlaceSheet: View {
     let onClose: () -> Void
 
     @State private var savingPlace: Place?
+    @State private var feed: StopArrivalsFeed?
 
     var body: some View {
         NavigationStack {
@@ -46,10 +47,20 @@ struct MapPlaceSheet: View {
 
                 if let stop = place.stop {
                     Section {
+                        StopArrivalsSummary(result: feed?.result)
+                    } header: {
+                        Text("Próximos pasos")
+                    }
+                    .task(id: stop.id) {
+                        if feed == nil { feed = StopArrivalsFeed(arrivals: environment.arrivals) }
+                        await feed?.run(stop: stop)
+                    }
+
+                    Section {
                         NavigationLink {
                             StopDetailView(stop: stop, environment: environment)
                         } label: {
-                            Label("Ver llegadas", systemImage: "clock.arrow.circlepath")
+                            Label("Ver horario y detalles", systemImage: "clock.arrow.circlepath")
                         }
                         Button {
                             environment.favourites.toggle(stop)

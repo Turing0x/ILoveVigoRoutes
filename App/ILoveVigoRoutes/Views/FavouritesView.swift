@@ -341,88 +341,9 @@ struct FavouriteStopCard: View {
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 Text(stop.name).font(.headline).lineLimit(2)
-                if let result {
-                    switch result.source {
-                    case .realtime:
-                        if result.arrivals.isEmpty {
-                            fallbackRows(result.scheduled, note: "Sin pasos previstos ahora mismo.")
-                        } else {
-                            ForEach(result.arrivals.prefix(3)) { CompactArrivalRow(arrival: $0) }
-                        }
-                    case .cache(let at, let failure):
-                        Text(failure)
-                            .font(.caption2).foregroundStyle(.orange).lineLimit(2)
-                        ForEach(result.arrivals.prefix(3)) {
-                            CompactArrivalRow(arrival: $0,
-                                              overrideKind: .cached(age: Date().timeIntervalSince(at)))
-                        }
-                    case .unavailable(let failure):
-                        Text(failure)
-                            .font(.caption2).foregroundStyle(.orange).lineLimit(2)
-                        fallbackRows(result.scheduled, note: nil)
-                    }
-                } else {
-                    HStack { ProgressView().controlSize(.mini); Text("Consultando…").font(.caption) }
-                        .foregroundStyle(.secondary)
-                }
+                StopArrivalsSummary(result: result)
             }
             .padding(.vertical, 2)
         }
-    }
-
-    @ViewBuilder
-    private func fallbackRows(_ scheduled: [ScheduledDeparture], note: String?) -> some View {
-        if let note {
-            Text(note).font(.caption2).foregroundStyle(.secondary)
-        }
-        if scheduled.isEmpty {
-            Text("Tampoco hay horario teórico disponible.")
-                .font(.caption2).foregroundStyle(.secondary)
-        } else {
-            ForEach(scheduled.prefix(3)) { CompactScheduledRow(departure: $0) }
-        }
-    }
-}
-
-struct CompactArrivalRow: View {
-    let arrival: Arrival
-    var overrideKind: DataKind?
-
-    private var kind: DataKind {
-        overrideKind ?? (arrival.confidence.hasTrackedVehicle ? .tracked : .estimated)
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            LineBadge(name: arrival.rawLine)
-            Text(arrival.destination).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-            Spacer(minLength: 2)
-            DataKindBadge(kind: kind, compact: true)
-            Text(WaitTime(minutes: arrival.minutes).compactText)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(kind.tint)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("Línea \(arrival.rawLine), \(WaitTime(minutes: arrival.minutes).spoken), \(kind.label)"))
-    }
-}
-
-struct CompactScheduledRow: View {
-    let departure: ScheduledDeparture
-
-    var body: some View {
-        HStack(spacing: 8) {
-            LineBadge(name: departure.routeShortName)
-            Text(departure.destination).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-            Spacer(minLength: 2)
-            DataKindBadge(kind: .timetable, compact: true)
-            Text(departure.departure.clockDescription)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.blue)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("""
-            Línea \(departure.routeShortName), horario teórico \(departure.departure.clockDescription)
-            """))
     }
 }
