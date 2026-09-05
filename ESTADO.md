@@ -19,6 +19,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 7 — Un solo buscador, dos pestañas** | ✅ Hecha y fusionada a `main` |
 | **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
+| **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -1229,13 +1230,14 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **291 tests de `VigoCore` en verde** (170 antes de la Fase 4;
+Al escribir este documento: **311 tests de `VigoCore` en verde** (170 antes de la Fase 4;
 +24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +71 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
 `JourneySummaryTests`; +5 en la Fase 8 entre `JourneyWalkSegmentsTests` y la ampliación de
 `FirstBoardingMatchTests`; +13 en la Fase 9 entre `DepartureBoardTests` y
-`LineTimetableQueryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+`LineTimetableQueryTests`; +20 en la Fase 10 entre `JourneyOrderingTests`,
+`EgressCandidatesTests` y `MapOrderingTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **16 tests del target de app** (eran 23 hasta que la Fase 6 se llevó
 `PlannerModelTests` con la pestaña que probaba; la cifra de 17 que este documento citaba
 después de la Fase 6 no coincide con lo que arroja `xcodebuild test` hoy — ni `PlacePickerView`
@@ -1331,3 +1333,108 @@ horarios colapsa en una sola lista legible.
 - [x] Una línea nocturna: las salidas de después de medianoche aparecen en el día correcto
 - [x] El selector de día solo ofrece los días que el feed cubre
 - [x] La tabla se lee de un vistazo en la pantalla del iPhone
+
+## Fase 10 — Criterio de ordenación de alternativas
+
+Plan en `PLAN-FASES-8-13.md`, §Fase 10. Tres criterios en un menú, con **«Menos caminata» por
+defecto**. Depende de la Fase 8: un criterio que ordena por la caminata final es indemostrable
+mientras el mapa no dibuje ninguna caminata.
+
+### Hecho
+
+- [x] **1/2 — El motor: candidatos de bajada, cuatro ejes y `JourneyOrdering`**
+  `VigoCore/Sources/VigoCore/Planner/JourneyOrdering.swift` y `JourneyShortlist.swift` (nuevos),
+  `JourneyReconstruction.swift`, `JourneyPlanner.swift`, `PlannerOptions.swift`;
+  tests en `JourneyOrderingTests.swift` (11) y `EgressCandidatesTests.swift` (4).
+
+  **El problema de fondo no era ordenar.** Al hacer «menos caminata» el criterio por defecto,
+  deja de bastar con reordenar: hay que asegurarse de que la alternativa que menos te hace andar
+  **llegue a existir**, y no existía, por dos motivos independientes.
+
+  1. `bestEgress` elegía **una** parada de bajada por ronda: la de llegada mínima. Una parada
+     que te deja a 100 m del portal pero a la que el bus llega tres minutos más tarde no se
+     filtraba después — no se generaba. Ahora `egressCandidates` devuelve el frente de Pareto
+     sobre (llegada, caminata final), acotado a `maxEgressCandidates` (3), y **el recorte del
+     frente se hace por los dos extremos**: su cola es justo el candidato que todo esto existe
+     para producir.
+  2. El filtro de dominadas miraba tres ejes y no conocía la caminata, así que descartaba
+     exactamente ese candidato antes de que nadie pudiera ordenarlo. Es el caso literal del plan:
+     X (llega 9:40, 1 transbordo, 2 min a pie) contra Y (llega 9:38, 0 transbordos, 15 min a
+     pie) — Y ganaba en los tres ejes y X, que era la respuesta bajo «menos caminata»,
+     desaparecía. `JourneyShortlist.undominated` añade el cuarto eje.
+
+  Coste honesto y aceptado: un eje más significa menos dominancia y un frente mayor. Por eso
+  `maxCandidates` (8) es mayor que `maxAlternatives` (4), y por eso el corte **no puede ser «los
+  primeros por llegada»** — eso metería el criterio antiguo por la puerta de atrás, dejando un
+  menú que reordena opciones elegidas todas por rapidez. `JourneyShortlist.cut` reparte por
+  turnos entre criterios, lo que garantiza que el óptimo de cada uno sobrevive.
+
+  `JourneyOrdering` fija los tres criterios con sus desempates. «Sale antes» se mide sobre el
+  **embarque** y no sobre `Journey.departure`, que es cuándo hay que echar a andar y difiere por
+  alternativa; «llega antes» reproduce exactamente el orden anterior a esta fase, desempate
+  invertido de la salida incluido, y hay un test dedicado a decirlo.
+
+  **Un fallo latente encontrado de camino:** `reconstruct` suponía al menos un tramo en bus
+  (`rides[rides.count - 1]`), y un candidato de bajada alcanzable **sin coger nada** lo habría
+  reventado. No es hipotético: pasa cuando origen y destino están cerca, porque entonces una
+  misma parada está en la lista de acceso y en la de salida. Ahora devuelve `nil` y el llamador
+  lo salta.
+
+  **Verificado por mutación, quince veces.** Entre ellas: una sola parada de bajada (el
+  comportamiento anterior), el frente sin filtrar, dominadas con tres ejes, corte por llegada,
+  «menos caminata» implementada como duración, «sale antes» sobre `departure`, el desempate de
+  «llega antes» invertido, la caminata final buscando el último tramo *entre paradas*, cortar
+  antes de ordenar, y el índice de la alternativa sobreviviendo a un reorden.
+
+  **Una pasó desapercibida** —el recorte del frente por la cabeza—, y por la razón de siempre:
+  mi frente de prueba tenía dos miembros, y con dos, recortar por la cabeza y recortar por los
+  extremos dan lo mismo. Reescrito con tres (B a las 08:10, C a las 08:20 y D a las 09:40, con
+  caminatas de 500, 120 y 30 s: llegadas crecientes y caminatas decrecientes, así que los tres
+  están en el frente). Con él, la mutación tumba tres tests. Quinta vez que este documento anota
+  el mismo patrón.
+
+  **Dos tests existentes se rompieron, y era lo esperado (R2 del plan).** Los dos fijaban el
+  corte con `maxAlternatives`, que ya no es la perilla que lo hace: pasan a `maxCandidates`. El
+  comportamiento probado —que hay un tope y que conserva la llegada más temprana— no cambia.
+
+- [x] **2/2 — El criterio en el estado del mapa y en la hoja**
+  `VigoCore/Sources/VigoCore/MapFlow/MapNavigationState.swift`;
+  `App/ILoveVigoRoutes/Views/Map/MapScreenModel.swift`, `Map/MapRouteSheet.swift`,
+  `Map/MapScreen.swift`; tests en `MapNavigationStateTests.swift` (+5, suite
+  `MapOrderingTests`).
+
+  `visibleJourneys` aplica el criterio y corta a lo que cabe. El corte vive aquí y no en el
+  motor a propósito: el planificador devuelve un conjunto mayor que la pantalla justo para que
+  la preferencia elija de él.
+
+  `setOrdering` vuelve a la primera alternativa y apaga el seguimiento. `selectedAlternative` es
+  un índice sobre la lista **visible**, así que reordenar sin resetearlo deja el mapa resaltando
+  una ruta y la lista otra — el mismo argumento que ya estaba escrito en `selectAlternative(at:)`.
+
+  En la app: menú en la cabecera de «Alternativas» (no `Picker` segmentado, por lo ya
+  argumentado para la hora de salida), preferencia en `UserDefaults` bajo `route.ordering` —la
+  misma línea que este proyecto ya traza: presentación trivial a `UserDefaults`, datos del
+  usuario a SQLite—, y las trazas se reconstruyen al cambiar de criterio **sin replanificar**.
+  Una clave sin escribir, o con un criterio que una versión posterior quite, cae al valor por
+  defecto.
+
+  De paso, el tiempo real se pide solo para las visibles y no para el conjunto entero:
+  preguntar por trayectos que nadie mira sería justo el sondeo que el §8 del handoff descarta.
+
+**Fase 10 completa — 2 pasos.** Suite de `VigoCore`: **311 tests en verde** (+20). Target de app:
+**16 tests en verde**. Debug y Release compilan.
+
+**Medido contra el feed real** (archivo descargado el 2026-09-05, 17,2 MB): planificación en
+frío —construcción del `Timetable` incluida— en **122,9 ms**, con el presupuesto del handoff en
+1 s. Generar hasta tres bajadas por ronda y un frente de cuatro ejes **no ha movido el coste**:
+la Fase 3 medía 129 ms sobre este mismo caso. Reconstruir es aritmética sobre arrays en memoria;
+lo caro sigue siendo leer `shapePoint`, y eso sigue haciéndose solo para las visibles.
+
+**Pendiente de comprobar en dispositivo** (lo hace el propietario):
+
+- [ ] Un destino con dos paradas de bajada plausibles: ¿«Menos caminata» ofrece de verdad otra
+      opción, o la misma reordenada?
+- [ ] El menú de tres opciones cabe en la cabecera sin partir la fila
+- [ ] Cambiar de criterio con una alternativa resaltada: el mapa redibuja la correcta
+- [ ] El criterio elegido sobrevive a matar y relanzar la app
+- [ ] Con «Llega antes» la app se comporta como antes de esta fase
