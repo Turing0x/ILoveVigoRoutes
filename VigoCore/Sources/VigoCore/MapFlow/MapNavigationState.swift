@@ -163,6 +163,22 @@ public struct MapNavigationState: Sendable {
         return true
     }
 
+    /// Both ends at once — a saved journey tapped from the search sheet, where there is
+    /// nothing to ask the GPS because the user stored both ends themselves.
+    ///
+    /// Turns off location following for the same reason `setOrigin` does: an origin that came
+    /// from something the user saved is theirs, and a later fix must not quietly replace it.
+    @discardableResult
+    public mutating func route(from origin: MapPlace, to destination: MapPlace) -> Bool {
+        self.origin = origin
+        self.destination = destination
+        originFollowsLocation = false
+        route = .idle
+        selectedAlternative = 0
+        mode = .routing
+        return true
+    }
+
     public mutating func setOrigin(_ place: MapPlace) {
         origin = place
         // An origin the user picked is theirs, even when they picked "Mi ubicación" from a

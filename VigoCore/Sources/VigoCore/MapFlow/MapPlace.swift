@@ -118,3 +118,27 @@ public struct MapPlace: Sendable, Hashable, Identifiable {
     /// and a stop that happen to share a coordinate are not, because their origins differ.
     public var id: Self { self }
 }
+
+extension MapPlace {
+    /// One end of a saved journey, as the map's own place type.
+    ///
+    /// Keeps the **saved name** as the label — "Casa", not "Rúa do Areal, 12" — because that
+    /// is the whole point of having saved it. When the endpoint is anchored to a stop, the
+    /// stop's own name becomes the subtitle, so the name does not hide which stop it means.
+    ///
+    /// An endpoint whose stop has vanished from the feed still produces a usable place: the
+    /// anchor keeps a fallback coordinate precisely so a reimport cannot strand a saved
+    /// journey, and the planner only ever needs a coordinate.
+    public static func savedEndpoint(_ endpoint: SavedEndpoint) -> MapPlace {
+        MapPlace(place: endpoint.place,
+                 subtitle: endpoint.anchor.resolvedStop?.name,
+                 origin: endpoint.placeID.map { .savedPlace($0) } ?? .address)
+    }
+}
+
+extension SavedJourney {
+    /// The two ends, ready for the map.
+    public var mapEnds: (origin: MapPlace, destination: MapPlace) {
+        (MapPlace.savedEndpoint(origin), MapPlace.savedEndpoint(destination))
+    }
+}

@@ -153,12 +153,19 @@ struct MapScreen: View {
             }
             .overlay(alignment: .top) { hint(model) }
             .overlay(alignment: .topTrailing) { layersButton(model) }
+            // Only while browsing: once a card or a route is up, the sheet is the way in and
+            // a second search affordance underneath it would be a second front door.
+            .safeAreaInset(edge: .bottom) {
+                if model.state.mode == .browsing {
+                    MapBrowseBar { model.beginSearch() }
+                }
+            }
             // One sheet for the whole flow, switched by mode. Presenting a second sheet
             // over the first would stack two cards for what is one continuous journey from
             // "this place" to "how do I get there".
             .sheet(isPresented: Binding(
                 get: { model.state.mode != .browsing },
-                set: { if !$0 { dismissSelection(model) } }
+                set: { if !$0 { dismissSheet(model) } }
             )) {
                 sheetContent(model)
                     .presentationDetents([.height(sheetPeek), .fraction(sheetFraction), .large])
@@ -175,7 +182,7 @@ struct MapScreen: View {
             MapPlaceSheet(place: place,
                           distanceText: model.distanceText(to: place),
                           onRoute: { Task { await model.routeToSelectedPlace() } },
-                          onClose: { dismissSelection(model) })
+                          onClose: { dismissSheet(model) })
 
         case .routing, .journeyDetail:
             MapRouteSheet(
@@ -194,11 +201,20 @@ struct MapScreen: View {
                 onSelect: { model.selectAlternative(at: $0) },
                 onOpen: { model.openSelectedAlternative() },
                 onCloseDetail: { model.dismiss() },
-                onClose: { dismissSelection(model) })
+                onClose: { dismissSheet(model) })
 
-        case .browsing, .searching:
-            // Unreachable while the sheet is only presented for the modes above; drawing
-            // nothing beats a placeholder that could flash during a dismiss animation.
+        case .searching:
+            MapSearchSheet(
+                purpose: .explore,
+                // No dismissal here: picking switches the same sheet over to the place card,
+                // which is the whole point of one sheet for the flow.
+                onPick: { model.select($0) },
+                onPickJourney: { journey in Task { await model.route(savedJourney: journey) } },
+                onCancel: { dismissSheet(model) })
+
+        case .browsing:
+            // Unreachable: the sheet is not presented in this mode. Drawing nothing beats a
+            // placeholder that could flash during the dismiss animation.
             EmptyView()
         }
     }
@@ -219,9 +235,14 @@ struct MapScreen: View {
     private let sheetPeek: CGFloat = 180
     private let sheetFraction: CGFloat = 0.45
 
-    private func dismissSelection(_ model: MapScreenModel) {
+    /// Closing the sheet, from any mode it can be showing.
+    ///
+    /// `clearSelection()` is not enough: it only acts on `.place` by design, so dragging the
+    /// sheet down while searching — or while looking at a route — would leave `mode` where it
+    /// was, the binding still true, and the sheet stuck open.
+    private func dismissSheet(_ model: MapScreenModel) {
         selection = nil
-        model.clearSelection()
+        model.closeSheet()
     }
 
     /// Centres on a place, lifted clear of the sheet.

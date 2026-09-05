@@ -20,9 +20,9 @@ struct MapRouteSheet: View {
 
     /// Which end is being replaced, or `nil` when neither is.
     ///
-    /// Reuses `PlacePickerView` — the planner tab's picker, already verified — rather than
-    /// waiting for the map's own search sheet. It covers every source an endpoint can come
-    /// from, and swapping it for the map-native one later is a change at this one line.
+    /// Was `PlacePickerView` for exactly one step, as a placeholder that worked rather than a
+    /// button that did nothing; it is now the map's own search sheet, so both ways into a
+    /// place — the search bar and this row — land on the same list.
     @State private var editing: PlacePickerRole?
 
     var body: some View {
@@ -63,9 +63,12 @@ struct MapRouteSheet: View {
                 JourneyDetailView(journey: journey)
             }
             .sheet(item: $editing) { role in
-                PlacePickerView(title: role == .origin ? "Origen" : "Destino", role: role) { picked in
-                    onPick(role, MapPlace(picked: picked))
-                }
+                MapSearchSheet(purpose: .endpoint(role),
+                               onPick: { onPick(role, $0); editing = nil },
+                               // Unreachable for `.endpoint`: that purpose contributes one end
+                               // of a saved journey through `onPick` instead of planning it.
+                               onPickJourney: { _ in },
+                               onCancel: { editing = nil })
             }
         }
     }

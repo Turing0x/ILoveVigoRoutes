@@ -86,6 +86,13 @@ final class MapScreenModel {
 
     // MARK: - Selección
 
+    /// A place chosen from anywhere that is not the map itself — a search result, a saved
+    /// place. Lands on the same card a tap on the map opens, which is what keeps the search
+    /// from becoming a second, parallel way of choosing somewhere.
+    func select(_ place: MapPlace) {
+        state.select(place)
+    }
+
     /// The map's selection binding resolved to one of our own stop markers.
     func selectStop(id: StopID) {
         guard let stop = allStops.first(where: { $0.id == id }) else { return }
@@ -134,6 +141,25 @@ final class MapScreenModel {
     /// own — the card's distance needs it regardless.
     func updateCurrentLocation(_ coordinate: Coordinate) {
         state.updateCurrentLocation(coordinate)
+    }
+
+    // MARK: - Búsqueda
+
+    func beginSearch() { state.beginSearch() }
+
+    /// The sheet closed, from whatever it was showing: all the way out to the clean map.
+    ///
+    /// One door out for every mode, rather than a different rule per gesture — the same
+    /// argument behind `MapNavigationState.dismiss` being a single table. `dismiss()` is the
+    /// one that walks back a level; this is the X and the drag-to-close.
+    func closeSheet() { state.reset() }
+
+    /// A saved journey, planned whole. Both ends come from what the user stored, so there is
+    /// nothing to ask the GPS.
+    func route(savedJourney: SavedJourney) async {
+        let ends = savedJourney.mapEnds
+        state.route(from: ends.origin, to: ends.destination)
+        await plan()
     }
 
     // MARK: - Ruta

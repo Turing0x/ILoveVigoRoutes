@@ -331,3 +331,72 @@ struct MapNavigationStateTests {
         #expect(named.label == "Rúa do Areal, 12")
     }
 }
+
+/// Trayectos guardados llevados al mapa.
+@Suite("Trayectos guardados en el mapa")
+struct SavedJourneyOnMapTests {
+
+    private let here = Coordinate(latitude: 42.2328, longitude: -8.7226)
+
+    private func endpoint(name: String, anchor: SavedPlaceAnchor,
+                          placeID: SavedPlaceID? = nil) -> SavedEndpoint {
+        SavedEndpoint(placeID: placeID, name: name, symbolName: "house.fill", anchor: anchor)
+    }
+
+    @Test("Un extremo guardado conserva su nombre, no el de la parada")
+    func savedNameWins() {
+        let stop = PlannerFixture.stop("6930", name: "Rúa do Areal")
+        let place = MapPlace.savedEndpoint(
+            endpoint(name: "Casa", anchor: .stop(stop), placeID: SavedPlaceID("p1")))
+
+        #expect(place.label == "Casa", "guardarlo con un nombre propio es el motivo de guardarlo")
+        #expect(place.subtitle == "Rúa do Areal", "pero sin ocultar a qué parada se refiere")
+        #expect(place.origin == .savedPlace(SavedPlaceID("p1")))
+    }
+
+    /// El feed se reimporta entero cada semana y puede llevarse una parada por delante. Un
+    /// trayecto guardado no puede quedarse inservible por eso: el ancla guarda coordenada de
+    /// respaldo justo para esto, y al planificador le basta una coordenada.
+    @Test("Un extremo cuya parada desapareció sigue siendo planificable")
+    func orphanedEndpointStillWorks() {
+        let place = MapPlace.savedEndpoint(endpoint(
+            name: "Trabajo",
+            anchor: .orphanedStop(StopID("se fue"), fallback: here)))
+
+        #expect(place.coordinate == here)
+        #expect(place.subtitle == nil, "no hay parada viva de la que dar el nombre")
+        #expect(place.label == "Trabajo")
+    }
+
+    @Test("Un extremo suelto, sin lugar guardado detrás, no finge estarlo")
+    func adHocEndpointIsNotLinked() {
+        let place = MapPlace.savedEndpoint(endpoint(name: "Otro sitio", anchor: .coordinate(here)))
+        #expect(place.origin == .address)
+        #expect(place.stop == nil)
+    }
+
+    @Test("Tocar un trayecto guardado pone los dos extremos y deja de seguir al GPS")
+    func routingBothEndsStopsFollowingLocation() {
+        var state = MapNavigationState()
+        state.updateCurrentLocation(here)
+        #expect(state.originFollowsLocation)
+
+        let journey = SavedJourney(
+            id: SavedJourneyID("j1"), customLabel: "Al trabajo",
+            origin: endpoint(name: "Casa", anchor: .coordinate(here)),
+            destination: endpoint(name: "Trabajo",
+                                  anchor: .coordinate(Coordinate(latitude: 42.24, longitude: -8.71))),
+            createdAt: Date(timeIntervalSince1970: 1_757_000_000), sortIndex: 0)
+        let ends = journey.mapEnds
+        state.route(from: ends.origin, to: ends.destination)
+
+        #expect(state.mode == .routing)
+        #expect(state.origin?.label == "Casa")
+        #expect(state.destination?.label == "Trabajo")
+        // Los dos extremos los eligió el usuario al guardarlos; un fix posterior no puede
+        // sustituir el origen por "Mi ubicación" y convertir el trayecto en otro distinto.
+        #expect(!state.originFollowsLocation)
+        state.updateCurrentLocation(Coordinate(latitude: 42.30, longitude: -8.60))
+        #expect(state.origin?.label == "Casa")
+    }
+}

@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 6/11 pasos. Planificar sin salir del mapa ya funciona |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 7/11 pasos. Buscar, seleccionar y planificar, todo en el mapa |
 
 ---
 
@@ -750,6 +750,73 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   detalle por tramos; intercambiar extremos y ver que replanifica; cambiar la hora de salida;
   y comprobar el mensaje correcto con una consulta fuera de la ventana del feed.
 
+- [x] **6/11 — Búsqueda dentro del mapa**
+  `App/ILoveVigoRoutes/Views/Map/MapSearchSheet.swift` (nuevo, incluye `MapBrowseBar`);
+  `MapScreen.swift`, `MapScreenModel.swift`, `MapRouteSheet.swift` y
+  `MapPlaceResolver.swift` modificados; `VigoCore/MapFlow/MapPlace.swift` y
+  `MapNavigationState.swift` ampliados.
+  Tests: `SavedJourneyOnMapTests` (4, dentro de `MapNavigationStateTests.swift`).
+
+  Las mismas cuatro fuentes que cubre `PlacePickerView` —paradas, direcciones, lugares
+  guardados y favoritas— más los trayectos guardados, y con las mismas reglas, que ya se
+  discutieron en su día y no han cambiado: la búsqueda de paradas corre en cada pulsación
+  (0,2 ms contra SQLite sobre 1149 filas) y la de direcciones espera 300 ms y va siempre
+  centrada en una caja fija de Vigo que nunca lleva la ubicación del usuario.
+
+  **Lo que cambia es el destino de un resultado.** El selector del planificador tenía que
+  *devolver un extremo* a un formulario. Aquí un resultado es un sitio del mapa, así que
+  elegirlo abre su ficha —la misma que abre un toque en el mapa— y la ruta queda a un toque
+  más. Es la forma de Apple Maps, y es lo que permite que la misma hoja sirva para "búscame
+  un sitio" y para "cámbiame este extremo".
+
+  **`PlacePickerView` sale del flujo del mapa**, tal como el paso 5 anunció: era el
+  marcador de posición que funcionaba mientras la búsqueda propia no existía, y sustituirlo
+  ha sido el cambio de una línea que se prometió. Sigue viva para la pestaña Planificar y
+  para `SavedPlaceEditorView`. El puente `MapPlace(picked:)` que hacía falta para ella se
+  queda sin usos y **se borra en el mismo commit**, en vez de quedarse ahí por si acaso.
+
+  **La cápsula de búsqueda no es una hoja permanente**, que es la forma de Apple Maps. Una
+  hoja siempre presentada taparía la barra de pestañas mientras el mapa esté abierto, y las
+  otras cuatro pestañas tienen que seguir alcanzables mientras existan. Cuando "Planificar"
+  desaparezca, promoverla es cambiar esta única vista.
+
+  **Dos errores encontrados al cablearlo, los dos por no tener simulador delante sino por
+  leer el código:**
+  1. **La hoja se habría quedado atascada.** Cerrarla llamaba a `clearSelection()`, que por
+     diseño solo actúa sobre `.place`. Arrastrarla hacia abajo estando en `.searching` —o
+     mirando una ruta— habría dejado `mode` donde estaba, la binding en `true` y la hoja sin
+     poder cerrarse. Ahora hay un `closeSheet()` que vale para todos los modos: una sola
+     puerta de salida, el mismo argumento por el que `dismiss()` es una sola tabla.
+  2. **La hoja se cerraba a sí misma y pisaba lo recién elegido.** `MapSearchSheet` llamaba a
+     su `@Environment(\.dismiss)` al elegir un resultado; presentada desde el mapa eso
+     desmonta la hoja en la que la ficha estaba a punto de aparecer, y compite con la
+     selección que acaba de hacerse. Ahora quien presenta decide qué significa cerrar
+     (`onCancel`), porque la hoja no puede saberlo: desde el mapa es una cara de una hoja que
+     se queda, y desde la hoja de ruta es una hoja anidada que sí se cierra de verdad.
+
+  **En `VigoCore`:** `MapNavigationState.route(from:to:)` para poner los dos extremos de
+  golpe, y `MapPlace.savedEndpoint` / `SavedJourney.mapEnds` para traducir un trayecto
+  guardado. Un extremo guardado conserva **su** nombre —"Casa", no "Rúa do Areal, 12", que
+  es el motivo de haberlo guardado— y usa el nombre de la parada como subtítulo para no
+  ocultar a cuál se refiere. Un extremo cuya parada ya no está en el feed sigue siendo
+  planificable, que es exactamente para lo que el ancla guarda coordenada de respaldo desde
+  la Fase 4.
+
+  **Verificado por mutación, cinco veces:** (1) el extremo pierde su nombre guardado; (2) el
+  subtítulo no dice de qué parada se trata; (3) un extremo suelto finge estar enlazado a un
+  lugar guardado; (4) los dos extremos salen intercambiados; (5) un trayecto guardado sigue
+  al GPS y deja que un fix posterior sustituya su origen. Las cinco tumban tests.
+
+  Suite de `VigoCore`: **248 tests en verde** (+4). Debug y Release compilan.
+
+  **Pendiente de comprobar en dispositivo:** la cápsula de búsqueda solo aparece con el mapa
+  limpio; buscar "Urzáiz" y ver paradas y direcciones separadas; con el campo vacío, ver
+  trayectos y lugares guardados y favoritas; elegir un resultado y aterrizar en su ficha;
+  tocar un trayecto guardado y que planifique entero; cambiar un extremo desde la hoja de
+  ruta; y cerrar la hoja arrastrándola hacia abajo desde **cada** uno de los modos —búsqueda,
+  ficha y ruta— que es donde estaba el primero de los dos errores.
+
+
 
 
 
@@ -762,8 +829,8 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **244 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +50 en la
+Al escribir este documento: **248 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +54 en la
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests` y `CoordinateBoundsTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
