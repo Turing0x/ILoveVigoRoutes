@@ -15,6 +15,7 @@ import VigoCore
 @Observable
 final class MapScreenModel {
     private let repository: TransitRepository
+    private let resolver: any MapPlaceResolving
     private let defaults: UserDefaults
 
     private(set) var state = MapNavigationState()
@@ -42,8 +43,11 @@ final class MapScreenModel {
 
     private var viewport: MapStopsLayer.Viewport?
 
-    init(repository: TransitRepository, defaults: UserDefaults = .standard) {
+    init(repository: TransitRepository,
+         resolver: any MapPlaceResolving = MapKitPlaceResolver(),
+         defaults: UserDefaults = .standard) {
         self.repository = repository
+        self.resolver = resolver
         self.defaults = defaults
         self.stopsVisible = defaults.bool(forKey: Self.stopsVisibleKey)
     }
@@ -95,4 +99,46 @@ final class MapScreenModel {
     }
 
     var selectedStop: Stop? { state.selectedPlace?.stop }
+
+    /// A point of interest Apple owns. Everything shown comes from the `MapFeature` itself —
+    /// no `MKMapItemRequest`, so tapping a POI costs no network round trip.
+    func selectPointOfInterest(title: String?, rawCategory: String?, coordinate: Coordinate) {
+        let label = title ?? MapPlaceLabels.pointOfInterestName(rawCategory: rawCategory)
+            ?? "Lugar"
+        state.select(MapPlace(
+            place: .coordinate(coordinate, label: label),
+            subtitle: MapPlaceLabels.pointOfInterestName(rawCategory: rawCategory),
+            origin: .pointOfInterest))
+    }
+
+    /// A point the user pressed.
+    ///
+    /// Selects immediately with the fallback label so the card appears under the finger, then
+    /// replaces it if reverse geocoding has something better. The guard before applying is
+    /// what stops a slow answer from renaming a place the user has since moved on from —
+    /// press two points quickly and the first reply must not land on the second card.
+    func dropPin(at coordinate: Coordinate) async {
+        state.select(.droppedPin(coordinate))
+        let resolved = await resolver.resolve(coordinate: coordinate)
+        guard let current = state.selectedPlace,
+              current.origin == .droppedPin,
+              current.coordinate == coordinate
+        else { return }
+        state.select(.droppedPin(coordinate, name: resolved.name, subtitle: resolved.subtitle))
+    }
+
+    /// Fed from `LocationProvider`, and kept even when the user has pinned an origin of their
+    /// own — the card's distance needs it regardless.
+    func updateCurrentLocation(_ coordinate: Coordinate) {
+        state.updateCurrentLocation(coordinate)
+    }
+
+    /// Straight-line distance from the device to a place, already worded. `nil` when there is
+    /// no fix yet, which is a normal state and not worth a placeholder.
+    func distanceText(to place: MapPlace) -> String? {
+        guard let from = state.currentLocation else { return nil }
+        let metres = TransitRepository.haversineMetres(
+            from.latitude, from.longitude, place.coordinate.latitude, place.coordinate.longitude)
+        return MapPlaceLabels.straightLineDistance(metres: metres)
+    }
 }

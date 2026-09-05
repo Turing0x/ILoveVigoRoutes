@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 4/11 pasos. El mapa ya arranca limpio |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 5/11 pasos. Mapa limpio y selección universal |
 
 ---
 
@@ -613,6 +613,72 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   matar y relanzar la app; que al alejarse sale el aviso con el número; y que tocar una
   parada sigue abriendo su detalle como antes.
 
+- [x] **4/11 — Selección universal: parada, POI de Apple y punto suelto → `MapPlaceSheet`**
+  `VigoCore/Sources/VigoCore/MapFlow/MapPlaceLabels.swift` (nuevo);
+  `App/ILoveVigoRoutes/Views/Map/MapPlaceResolver.swift` y `MapPlaceSheet.swift` (nuevos),
+  `MapScreen.swift` y `MapScreenModel.swift` ampliados, `DataSourcesView.swift` actualizada.
+  Tests: `MapPlaceLabelsTests.swift` (8).
+
+  Cumple la primera exigencia del propietario en su mitad de selección: **tres orígenes
+  distintos entran por la misma puerta y salen como el mismo `MapPlace`**, dibujado por la
+  misma ficha. Es lo que hace que "cualquier lugar disponible" sea un camino de código y no
+  tres casos especiales. `mapFeatureSelectionAccessory(nil)` apaga ya la tarjeta nativa de
+  Apple, que es lo que el paso 3 dejó pendiente a propósito hasta tener ficha propia.
+
+  **"Cómo llegar" todavía no está en la ficha**, y es deliberado: llega con la hoja de ruta.
+  Un botón que no lleva a ninguna parte sería peor que su ausencia durante el commit
+  intermedio. Con esto la ficha ya sirve para algo por sí sola — un POI o un punto suelto se
+  pueden guardar como lugar, y una parada abre sus llegadas y su estrella.
+
+  **La tabla de categorías se genera contra el SDK, no de memoria.** Las 73 categorías de
+  `MKPointOfInterestCategory.h` están traducidas, y `MapPlaceLabelsTests` fija esa misma
+  lista como dato de test: si un SDK futuro añade una, sale un test rojo en vez de un lugar
+  sin subtítulo que nadie nota. Una categoría desconocida **no** produce etiqueta —
+  devolver `MKPOICategoryFoo` o descamelizarlo sería inventarse un rótulo en castellano a
+  partir de un identificador inglés.
+
+  **Privacidad.** `MapKitPlaceResolver` solo geocodifica un punto que el usuario ha
+  mantenido pulsado a propósito: nunca la posición del dispositivo, nunca en bucle al mover
+  el mapa. Devuelve un valor en vez de lanzar, porque quedarse sin nombre es normal (sin red,
+  con Apple limitando, o en mitad de la ría) y no hay nada que un llamante pueda hacer
+  distinto: la ficha se queda en "Punto en el mapa" y el sitio sigue siendo planificable.
+  `DataSourcesView` lo dice ahora en voz alta, junto a lo que ya decía de la búsqueda de
+  direcciones.
+
+  **Detalles que sin dispositivo no se ven pero cambian el resultado:**
+  - Una respuesta lenta del geocodificador **no** puede renombrar una ficha que ya no es la
+    suya. `dropPin` comprueba, antes de aplicar, que el lugar seleccionado sigue siendo el
+    mismo punto: pulsar dos sitios seguidos no puede acabar con el nombre del primero sobre
+    la ficha del segundo.
+  - Al soltar un pin se limpia la selección del mapa. Dejar un marcador de parada resaltado
+    debajo de la ficha de un punto suelto es mentir sobre qué está enseñando la ficha.
+  - La cámara compensa la hoja moviendo el centro **al sur**, no al norte: bajar la latitud
+    del centro sube el pin en pantalla. Sin eso el sitio elegido queda detrás de la tarjeta.
+  - El lugar seleccionado solo dibuja pin propio si no es ya una de las paradas de la capa,
+    que si no serían dos pines en el mismo punto.
+
+  **Verificado por mutación, seis veces.** (1) categoría desconocida devolviendo el valor
+  crudo; (2) prefijo `MKPOICategory` sin recortar; (3) una categoría fuera de la tabla;
+  (4) punto decimal en vez de coma; (5) metros sin redondear a decenas; (6) distancia
+  negativa pintada igual. Las seis tumban tests.
+
+  **Fallo del arnés de mutación, corregido.** La primera pasada dio la (4) por indetectada.
+  No lo era: la mutación dejaba `)+ " km"`, que en Swift ni siquiera compila, y el arnés
+  contaba solo marcas de test fallido — un error de compilación daba cero y se leía como
+  "pasa desapercibida". Ahora distingue los dos casos, y con la mutación bien escrita la (4)
+  cae. Un falso ❌ es el único error que ese arnés podía producir: un falso ✅ era imposible,
+  así que las mutaciones ya dadas por buenas siguen siéndolo.
+
+  Suite de `VigoCore`: **237 tests en verde** (+8). Debug y Release compilan.
+
+  **Pendiente de comprobar en dispositivo:** tocar una parada con la capa encendida; tocar un
+  POI de Apple **con la capa apagada** (el caso que demuestra que la selección universal no
+  depende de las paradas) y ver la ficha propia y no la de Apple; mantener pulsado en mitad
+  de una manzana y ver salir una dirección real; repetir en modo avión y ver "Punto en el
+  mapa" sin ningún error; y comprobar que panear y hacer zoom siguen intactos con el gesto
+  largo activo.
+
+
 
 
 
@@ -623,9 +689,10 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **229 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +35 en la
-Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests` y `MapStopsLayerTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+Al escribir este documento: **237 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +43 en la
+Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests` y
+`MapPlaceLabelsTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
 
