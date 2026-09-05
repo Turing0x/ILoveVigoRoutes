@@ -46,7 +46,8 @@ struct MapScreen: View {
         }
         .task {
             if model == nil {
-                model = MapScreenModel(repository: environment.repository)
+                model = MapScreenModel(repository: environment.repository,
+                                       planner: environment.planner)
             }
             model?.loadStops()
             location.requestPermissionIfNeeded()
@@ -84,6 +85,11 @@ struct MapScreen: View {
                     Marker(place.label, systemImage: place.symbolName,
                            coordinate: place.coordinate.clLocation)
                         .tint(.red)
+                }
+                if !model.state.route.journeys.isEmpty {
+                    JourneyOverviewMapContent(journeys: model.state.route.journeys,
+                                              traces: model.traces,
+                                              selected: model.state.selectedAlternative)
                 }
             }
             // Apple draws its own card for a selected point of interest. Ours replaces it.
@@ -136,21 +142,76 @@ struct MapScreen: View {
             .onChange(of: model.state.selectedPlace) { _, place in
                 if let place { focus(on: place) }
             }
+            // Framing follows the answer, not the question: as soon as there are routes, the
+            // camera opens on all of them rather than staying on the destination pin.
+            .onChange(of: model.state.route.journeys) { _, journeys in
+                guard !journeys.isEmpty else { return }
+                frame(journeys: journeys, traces: model.traces)
+            }
+            .onChange(of: model.state.selectedAlternative) { _, _ in
+                frame(journeys: model.state.route.journeys, traces: model.traces)
+            }
             .overlay(alignment: .top) { hint(model) }
             .overlay(alignment: .topTrailing) { layersButton(model) }
-            .sheet(item: Binding(
-                get: { model.state.selectedPlace },
-                set: { if $0 == nil { dismissSelection(model) } }
-            )) { place in
-                MapPlaceSheet(place: place,
-                              distanceText: model.distanceText(to: place)) {
-                    dismissSelection(model)
-                }
-                .presentationDetents([.height(sheetPeek), .fraction(sheetFraction), .large])
-                .presentationBackgroundInteraction(.enabled(upThrough: .fraction(sheetFraction)))
-                .presentationDragIndicator(.visible)
+            // One sheet for the whole flow, switched by mode. Presenting a second sheet
+            // over the first would stack two cards for what is one continuous journey from
+            // "this place" to "how do I get there".
+            .sheet(isPresented: Binding(
+                get: { model.state.mode != .browsing },
+                set: { if !$0 { dismissSelection(model) } }
+            )) {
+                sheetContent(model)
+                    .presentationDetents([.height(sheetPeek), .fraction(sheetFraction), .large])
+                    .presentationBackgroundInteraction(.enabled(upThrough: .fraction(sheetFraction)))
+                    .presentationDragIndicator(.visible)
             }
         }
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ model: MapScreenModel) -> some View {
+        switch model.state.mode {
+        case .place(let place):
+            MapPlaceSheet(place: place,
+                          distanceText: model.distanceText(to: place),
+                          onRoute: { Task { await model.routeToSelectedPlace() } },
+                          onClose: { dismissSelection(model) })
+
+        case .routing, .journeyDetail:
+            MapRouteSheet(
+                state: model.state,
+                failure: model.planningFailure,
+                onPick: { role, place in
+                    Task {
+                        switch role {
+                        case .origin: await model.setOrigin(place)
+                        case .destination: await model.setDestination(place)
+                        }
+                    }
+                },
+                onSwap: { Task { await model.swapEnds() } },
+                onDeparture: { departure in Task { await model.setDeparture(departure) } },
+                onSelect: { model.selectAlternative(at: $0) },
+                onOpen: { model.openSelectedAlternative() },
+                onCloseDetail: { model.dismiss() },
+                onClose: { dismissSelection(model) })
+
+        case .browsing, .searching:
+            // Unreachable while the sheet is only presented for the modes above; drawing
+            // nothing beats a placeholder that could flash during a dismiss animation.
+            EmptyView()
+        }
+    }
+
+    /// Opens the camera on every alternative at once, lifted clear of the sheet.
+    private func frame(journeys: [Journey], traces: [[JourneyTrace]]) {
+        guard !journeys.isEmpty else { return }
+        let region = JourneyTraceBuilder.region(for: journeys, traces: traces)
+        let lift = region.span.latitudeDelta * sheetFraction / 2
+        camera = .region(MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: region.center.latitude - lift,
+                                           longitude: region.center.longitude),
+            span: region.span))
     }
 
     /// Height of the smallest detent, and the share of the screen the medium one covers.

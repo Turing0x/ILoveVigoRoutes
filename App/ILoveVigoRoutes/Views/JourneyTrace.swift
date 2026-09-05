@@ -37,45 +37,39 @@ enum JourneyTraceBuilder {
         return found
     }
 
-    /// The smallest region that holds the whole journey — every trace point plus the ends
-    /// and every stop involved — with a margin so nothing sits against the edge.
+    /// The smallest region that holds the whole journey — every trace point plus every stop
+    /// and endpoint it names — with a margin so nothing sits against the edge.
     ///
     /// Framing on the first point of the first trace, as this used to, cuts long journeys in
     /// half: the map opens on the boarding stop and the destination is off screen.
     static func region(for journey: Journey, traces: [JourneyTrace]) -> MKCoordinateRegion {
-        var coordinates = traces.flatMap(\.coordinates)
-        for leg in journey.legs {
-            switch leg {
-            case .walk(let from, let to, _, _):
-                coordinates.append(from.coordinate.clLocation)
-                coordinates.append(to.coordinate.clLocation)
-            case .ride(_, _, _, _, let board, let alight, _, _, _):
-                coordinates.append(Coordinate(board).clLocation)
-                coordinates.append(Coordinate(alight).clLocation)
+        region(for: [journey], traces: [traces])
+    }
+
+    /// The same, for several alternatives at once, so the map can open showing all of them.
+    ///
+    /// `traces` is parallel to `journeys`; a journey whose trip carries no `shape_id` — which
+    /// GTFS permits — simply contributes its stops and endpoints, via `keyCoordinates`.
+    static func region(for journeys: [Journey], traces: [[JourneyTrace]]) -> MKCoordinateRegion {
+        var boxes: [CoordinateBounds?] = []
+        for (index, journey) in journeys.enumerated() {
+            var coordinates = journey.keyCoordinates
+            if traces.indices.contains(index) {
+                coordinates += traces[index].flatMap(\.coordinates).map {
+                    Coordinate(latitude: $0.latitude, longitude: $0.longitude)
+                }
             }
+            boxes.append(CoordinateBounds(coordinates))
         }
-        guard let first = coordinates.first else {
+
+        guard let bounds = CoordinateBounds.union(boxes) else {
             return MKCoordinateRegion(center: LocationProvider.vigoCentre,
                                       span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04))
         }
-
-        var minLatitude = first.latitude, maxLatitude = first.latitude
-        var minLongitude = first.longitude, maxLongitude = first.longitude
-        for coordinate in coordinates {
-            minLatitude = min(minLatitude, coordinate.latitude)
-            maxLatitude = max(maxLatitude, coordinate.latitude)
-            minLongitude = min(minLongitude, coordinate.longitude)
-            maxLongitude = max(maxLongitude, coordinate.longitude)
-        }
-
-        let centre = CLLocationCoordinate2D(latitude: (minLatitude + maxLatitude) / 2,
-                                            longitude: (minLongitude + maxLongitude) / 2)
-        // A fifth of margin on each side, and a floor so a two-stop hop does not open zoomed
-        // into the pavement.
-        let span = MKCoordinateSpan(
-            latitudeDelta: max((maxLatitude - minLatitude) * 1.4, 0.005),
-            longitudeDelta: max((maxLongitude - minLongitude) * 1.4, 0.005))
-        return MKCoordinateRegion(center: centre, span: span)
+        let spans = bounds.paddedSpans()
+        return MKCoordinateRegion(
+            center: bounds.centre.clLocation,
+            span: MKCoordinateSpan(latitudeDelta: spans.latitude, longitudeDelta: spans.longitude))
     }
 
     /// The shape covers the whole trip; a passenger only rode part of it. Cuts the polyline

@@ -57,3 +57,26 @@ final class MapKitPlaceResolver: MapPlaceResolving {
         return "\(street), \(number)"
     }
 }
+
+extension MapPlace {
+    /// Bridges what `PlacePickerView` hands back into the map's own place type.
+    ///
+    /// The picker can return a stop, the device's position, or a coordinate that came from an
+    /// address, a saved place or a tap on its own mini-map — and `PickedPlace` only
+    /// distinguishes the first two. The rest are recorded as `.address`, which is what they
+    /// almost always are; the origin only decides the glyph and whether stop actions are
+    /// offered, and neither of those would be more correct under another guess.
+    init(picked: PickedPlace) {
+        if picked.isCurrentLocation {
+            self = .currentLocation(picked.place.coordinate)
+        } else if case .stop(let stop) = picked.place {
+            self = .stop(stop)
+        } else {
+            self = MapPlace(place: picked.place, subtitle: nil, origin: .address)
+        }
+    }
+}
+
+extension PlacePickerRole: Identifiable {
+    var id: Self { self }
+}

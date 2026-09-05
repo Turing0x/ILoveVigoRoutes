@@ -8,12 +8,13 @@ import VigoCore
 /// arrivals and a favourite star exist for a stop and for nothing else, because they are the
 /// only thing the feed knows about.
 ///
-/// "Cómo llegar" is **not here yet**: it arrives with the route sheet, and a button that
-/// leads nowhere would be worse than its absence for the one commit in between.
+/// "Cómo llegar" is the primary action and sits above everything else, because it is the
+/// reason this screen exists.
 struct MapPlaceSheet: View {
     @Environment(AppEnvironment.self) private var environment
     let place: MapPlace
     let distanceText: String?
+    let onRoute: () -> Void
     let onClose: () -> Void
 
     @State private var savingPlace: Place?
@@ -23,6 +24,13 @@ struct MapPlaceSheet: View {
             List {
                 Section {
                     header
+                }
+
+                Section {
+                    Button(action: onRoute) {
+                        Label("Cómo llegar", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                            .font(.headline)
+                    }
                 }
 
                 if let stop = place.stop {

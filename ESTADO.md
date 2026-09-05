@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 5/11 pasos. Mapa limpio y selección universal |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 6/11 pasos. Planificar sin salir del mapa ya funciona |
 
 ---
 
@@ -678,6 +678,79 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   mapa" sin ningún error; y comprobar que panear y hacer zoom siguen intactos con el gesto
   largo activo.
 
+- [x] **5/11 — `MapRouteSheet`: la ruta, dentro del mapa**
+  `VigoCore/Sources/VigoCore/MapFlow/CoordinateBounds.swift` (nuevo);
+  `App/ILoveVigoRoutes/Views/Map/MapRouteSheet.swift` y
+  `JourneyOverviewMapContent.swift` (nuevos), `MapScreen.swift`, `MapScreenModel.swift` y
+  `MapPlaceSheet.swift` ampliados, `Views/JourneyTrace.swift` refactorizado.
+  Tests: `CoordinateBoundsTests.swift` (7).
+
+  **Con esto la primera exigencia del propietario está entera**: seleccionar cualquier sitio
+  del mapa, pedir "Cómo llegar" y ver las alternativas con sus horas, su duración y sus
+  trazados, sin salir de la pestaña Mapa.
+
+  **Cambio de orden respecto al plan, aprobado por el propietario:** la ruta pasa a ser el
+  paso 5 y la búsqueda dentro del mapa el 6. Con la selección universal ya hecha, la ruta es
+  lo que completa la exigencia nº 1; buscar es un atajo para lo que ya se puede hacer tocando
+  el mapa.
+
+  **Una sola hoja para todo el flujo, conmutada por `mode`.** Presentar una segunda hoja
+  encima de la primera apilaría dos tarjetas para lo que es un recorrido continuo, de "este
+  sitio" a "cómo llego". El detalle por tramos **no** es una hoja nueva: es
+  `JourneyDetailView` de la Fase 3 sin tocar —trazado, tramos, tiempo real del primer
+  embarque y el empujón a `JourneyMapView`— empujada dentro del `NavigationStack` de la hoja
+  y gobernada por `mode`, no por un `NavigationLink` suelto, para que volver atrás aterrice
+  donde dice `MapNavigationState.dismiss`.
+
+  **Los dos extremos se editan reutilizando `PlacePickerView`**, la del planificador, ya
+  verificada. Cubre todas las procedencias que puede tener un extremo, y sustituirla por la
+  búsqueda propia del mapa en el paso 6 es un cambio en una línea. Se resistió la tentación
+  de dejar los botones vacíos "hasta el paso siguiente": un botón muerto es exactamente lo
+  que este plan viene evitando en cada paso.
+
+  **`CoordinateBounds` sale de `JourneyTraceBuilder` a `VigoCore`.** El encuadre pasa de
+  enmarcar un trayecto a enmarcar **cuatro a la vez**, y ahí una unión mal hecha no es un
+  detalle estético sino una ruta dibujada medio fuera de pantalla. Al mudarse queda probado:
+  antes era aritmética en línea dentro de una vista, sin un solo test. `Journey.keyCoordinates`
+  se queda a propósito sin los puntos del trazado, para que un trayecto se pueda encuadrar
+  aunque su viaje no traiga `shape_id`, cosa que el GTFS permite.
+
+  Decisiones menores con su razón:
+  - Solo la alternativa destacada dibuja marcadores de parada. Con cuatro rutas compartiendo
+    corredor, pintar todos los embarques convierte el centro de Vigo en confeti.
+  - Las no seleccionadas se declaran **antes**, porque el orden de declaración es el orden de
+    dibujo: así la destacada nunca queda enterrada bajo una línea gris.
+  - Tocar la alternativa ya destacada la abre; tocar otra solo la destaca. El mapa se redibuja
+    antes de que nadie se meta en una ruta que todavía no ha visto.
+  - Los trazados de las cuatro se calculan **una vez** por resultado y fuera del hilo
+    principal. Son hasta dieciséis lecturas de SQLite y no pueden ocurrir en `body`.
+  - Un error lanzado por el planificador **no** se disfraza de "no hay rutas": `PlanOutcome`
+    ya tiene siete formas honestas de decir lo segundo.
+  - La hora de salida es un `Menu` y no un `Picker` segmentado: en una hoja el espacio
+    horizontal es el recurso escaso, y ese control se toca mucho menos que los dos extremos.
+
+  **Verificado por mutación, once veces.** Siete sobre `CoordinateBounds` —centro como media
+  de los puntos en vez del recuadro, mirar solo el primero y el último, unión que se queda con
+  una caja, span sin suelo, span sin margen, límites al revés sin enderezar, y un trayecto que
+  olvida las paradas de sus tramos en bus— más las cuatro actualizaciones de extremo por
+  separado.
+  **Una se coló y hubo que reforzar el test:** "mirar solo el primero y el último" pasaba
+  desapercibida porque el primer punto de la lista de prueba ya era el mínimo, así que
+  olvidarse de actualizarlo no cambiaba el resultado. Reescrita con cinco puntos donde el
+  primero no es extremo en ningún eje y cada uno de los cuatro extremos llega más tarde y
+  desde un punto distinto; con eso caen las cuatro mutaciones de extremo, una por una. Tercera
+  vez en esta fase que el mismo patrón aparece: el test verde no vale si la red de pruebas no
+  tiene la forma para exponer el fallo.
+
+  Suite de `VigoCore`: **244 tests en verde** (+7). Debug y Release compilan.
+
+  **Pendiente de comprobar en dispositivo:** elegir un destino en el mapa y pulsar "Cómo
+  llegar"; ver varias alternativas con líneas distintas; tocar cada una y comprobar que el
+  trazado destacado cambia y la cámara reencuadra; tocar la destacada otra vez y ver el
+  detalle por tramos; intercambiar extremos y ver que replanifica; cambiar la hora de salida;
+  y comprobar el mensaje correcto con una consulta fuera de la ventana del feed.
+
+
 
 
 
@@ -689,10 +762,10 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **237 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +43 en la
-Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests` y
-`MapPlaceLabelsTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+Al escribir este documento: **244 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +50 en la
+Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
+`MapPlaceLabelsTests` y `CoordinateBoundsTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
 

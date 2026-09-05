@@ -15,6 +15,7 @@ import VigoCore
 @Observable
 final class MapScreenModel {
     private let repository: TransitRepository
+    private let planner: JourneyPlanner
     private let resolver: any MapPlaceResolving
     private let defaults: UserDefaults
 
@@ -44,9 +45,11 @@ final class MapScreenModel {
     private var viewport: MapStopsLayer.Viewport?
 
     init(repository: TransitRepository,
+         planner: JourneyPlanner,
          resolver: any MapPlaceResolving = MapKitPlaceResolver(),
          defaults: UserDefaults = .standard) {
         self.repository = repository
+        self.planner = planner
         self.resolver = resolver
         self.defaults = defaults
         self.stopsVisible = defaults.bool(forKey: Self.stopsVisibleKey)
@@ -131,6 +134,91 @@ final class MapScreenModel {
     /// own — the card's distance needs it regardless.
     func updateCurrentLocation(_ coordinate: Coordinate) {
         state.updateCurrentLocation(coordinate)
+    }
+
+    // MARK: - Ruta
+
+    /// Traces for each alternative, parallel to `state.route.journeys`.
+    ///
+    /// Built once per result and never in `body`: reading a ridden shape is a SQLite hit per
+    /// ride leg, and with four alternatives that is up to sixteen.
+    private(set) var traces: [[JourneyTrace]] = []
+    private(set) var planningFailure: String?
+
+    /// "Cómo llegar" on the selected place.
+    func routeToSelectedPlace() async {
+        guard state.routeToSelectedPlace() else {
+            // With a place selected, the only way this fails is having no position and no
+            // pinned origin. Saying so beats a spinner that never resolves.
+            planningFailure = state.selectedPlace == nil
+                ? nil
+                : "Necesito saber desde dónde sales. Activa la ubicación o elige un origen."
+            return
+        }
+        await plan()
+    }
+
+    /// Runs the planner for whatever origin and destination the state currently holds.
+    func plan() async {
+        guard let query = state.routeQuery(now: Date()) else { return }
+        planningFailure = nil
+        traces = []
+        state.planningStarted()
+        do {
+            let result = try await planner.plan(query)
+            state.planningFinished(result.outcome)
+            await buildTraces()
+        } catch {
+            // A thrown error is not the same as "no route found", and must not borrow its
+            // wording — `PlanOutcome` has seven honest ways to say the latter.
+            state.planningFailed()
+            planningFailure = (error as? CustomStringConvertible)?.description
+                ?? error.localizedDescription
+        }
+    }
+
+    func setOrigin(_ place: MapPlace) async {
+        state.setOrigin(place)
+        await plan()
+    }
+
+    func setDestination(_ place: MapPlace) async {
+        state.setDestination(place)
+        await plan()
+    }
+
+    func swapEnds() async {
+        state.swapEnds()
+        await plan()
+    }
+
+    func setDeparture(_ departure: MapNavigationState.Departure) async {
+        guard state.departure != departure else { return }
+        state.departure = departure
+        await plan()
+    }
+
+    func selectAlternative(at index: Int) { state.selectAlternative(at: index) }
+
+    @discardableResult
+    func openSelectedAlternative() -> Bool { state.openSelectedAlternative() }
+
+    func dismiss() { state.dismiss() }
+
+    /// Traces for the highlighted alternative only, for whatever draws exactly one.
+    var selectedTraces: [JourneyTrace] {
+        traces.indices.contains(state.selectedAlternative) ? traces[state.selectedAlternative] : []
+    }
+
+    private func buildTraces() async {
+        let journeys = state.route.journeys
+        guard !journeys.isEmpty else { return }
+        let repository = self.repository
+        // Off the main actor. `.task` alone would still run this here, because reading the
+        // shapes has no suspension point of its own.
+        traces = await Task.detached(priority: .userInitiated) {
+            journeys.map { JourneyTraceBuilder.traces(for: $0, repository: repository) }
+        }.value
     }
 
     /// Straight-line distance from the device to a place, already worded. `nil` when there is
