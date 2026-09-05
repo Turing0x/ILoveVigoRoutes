@@ -142,10 +142,12 @@ struct JourneyAlternativesTests {
         #expect(journeys(result.outcome).count == 2)
     }
 
-    @Test("The list is capped by maxAlternatives")
+    /// Desde la Fase 10 el tope del planificador es `maxCandidates` — el conjunto entre el
+    /// que elige la preferencia —, y `maxAlternatives` es cuántas se enseñan.
+    @Test("The list is capped by maxCandidates")
     func capIsRespected() async throws {
         let repository = try HeadwayFixture.repository()
-        let planner = HeadwayFixture.planner(repository, options: PlannerOptions(maxAlternatives: 2))
+        let planner = HeadwayFixture.planner(repository, options: PlannerOptions(maxCandidates: 2))
         let result = try await planner.plan(HeadwayFixture.query(repository, hour: 7, minute: 55))
 
         #expect(journeys(result.outcome).count == 2)

@@ -319,14 +319,18 @@ struct JourneyReconstructionTests {
         #expect(journeys.map(\.transfers) == [1, 0])
     }
 
-    @Test("The list of alternatives is capped by maxAlternatives")
+    /// El tope de la reconstrucción es `maxCandidates` desde la Fase 10, no `maxAlternatives`:
+    /// esto produce el conjunto entre el que la preferencia del usuario elige, y
+    /// `maxAlternatives` pasa a ser cuántas se enseñan. El comportamiento probado —que hay un
+    /// tope y que se queda con la llegada más temprana— es el mismo.
+    @Test("The list of alternatives is capped by maxCandidates")
     func capIsRespected() throws {
         // The same network that yields two alternatives, asked for one.
         let (timetable, a, d) = Self.thresholdTimetable(secondLegArrival: T.at(7, 30))
         let query = RaptorQuery(access: [StopWalk(stop: Int32(a), seconds: 0)],
                                 egress: [StopWalk(stop: Int32(d), seconds: 0)],
                                 departure: T.at(6, 0), horizon: 3 * 3_600)
-        let options = PlannerOptions(minTransferSeconds: 60, maxAlternatives: 1)
+        let options = PlannerOptions(minTransferSeconds: 60, maxCandidates: 1)
         let result = RaptorEngine(options: options).run(timetable, query)
         let journeys = JourneyReconstruction.alternatives(
             timetable: timetable, result: result, query: query,

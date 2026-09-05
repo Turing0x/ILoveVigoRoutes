@@ -57,10 +57,15 @@ public struct PlannerOptions: Sendable, Hashable {
     /// in this window is telling the truth rather than being impatient.
     public var searchHorizon: TimeInterval
 
-    /// How many alternatives the planner will hand back at most.
+    /// How many alternatives are **shown** at once.
     ///
     /// Four is what fits on screen without scrolling past the fold, and past that the list
     /// stops being a choice and becomes a timetable.
+    ///
+    /// Since Fase 10 this is applied where the ordering is — `MapNavigationState.visibleJourneys`
+    /// — and no longer inside the engine, which cuts by `maxCandidates` instead. The two must
+    /// stay distinct: cutting the pool to what fits on screen, before the user's criterion has
+    /// been applied, would pick those four by the criterion they did not choose.
     public var maxAlternatives: Int
 
     /// How many times RAPTOR may be re-run from a later departure to fill that list.
@@ -70,6 +75,26 @@ public struct PlannerOptions: Sendable, Hashable {
     /// one after it", and that is a second search starting just after the first boarding.
     /// The bound is what stops a pathological query turning into an unbounded scan.
     public var maxDepartureScans: Int
+
+    /// How many journeys survive the filters and reach the ordering step.
+    ///
+    /// Not the same number as `maxAlternatives`, which is how many are *shown*. Once the
+    /// default ordering is "least walking at the end", cutting the shortlist by arrival before
+    /// the user's preference is applied would decide the answer by the criterion they did not
+    /// pick. This is the pool that preference chooses from.
+    public var maxCandidates: Int
+
+    /// How many alighting stops may be reconstructed per round.
+    ///
+    /// A destination usually has several stops within `accessRadiusMetres`, and they trade
+    /// against each other: one is reached sooner, another leaves a shorter walk. Reconstructing
+    /// only the fastest — as the planner did before Fase 10 — means the journey that walks
+    /// least is not filtered out later, it is **never generated**, and a "least walking"
+    /// ordering would be reordering options that were all chosen for speed.
+    ///
+    /// Three because the Pareto front here is small by nature: only stops that buy closeness
+    /// with time are on it at all.
+    public var maxEgressCandidates: Int
 
     /// How much time an extra transfer has to save before it is worth showing.
     ///
@@ -89,6 +114,8 @@ public struct PlannerOptions: Sendable, Hashable {
         searchHorizon: TimeInterval = 3 * 3600,
         maxAlternatives: Int = 4,
         maxDepartureScans: Int = 4,
+        maxCandidates: Int = 8,
+        maxEgressCandidates: Int = 3,
         extraTransferWorthSeconds: Int = 300
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
@@ -101,6 +128,8 @@ public struct PlannerOptions: Sendable, Hashable {
         self.searchHorizon = searchHorizon
         self.maxAlternatives = maxAlternatives
         self.maxDepartureScans = maxDepartureScans
+        self.maxCandidates = maxCandidates
+        self.maxEgressCandidates = maxEgressCandidates
         self.extraTransferWorthSeconds = extraTransferWorthSeconds
     }
 }
