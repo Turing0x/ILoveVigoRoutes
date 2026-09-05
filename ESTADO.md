@@ -17,7 +17,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 5 — El mapa como planificador** | ✅ Completa y comprobada en dispositivo |
 | **Fase 6 — Retirada de lo viejo** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Fase 7 — Un solo buscador, dos pestañas** | ✅ Hecha y fusionada a `main` |
-| **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha. Pendiente de comprobación en dispositivo |
+| **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha y comprobada en dispositivo |
 
 ---
 
@@ -1201,17 +1201,17 @@ la primera se implementara.
 **Fase 8 completa — 3 pasos.** Suite de `VigoCore`: **278 tests en verde** (+5). Target de app:
 **16 tests en verde**, sin cambios. Debug y Release compilan contra `generic/platform=iOS`.
 
-**Pendiente de comprobar en dispositivo** (lo hace el propietario):
+**Comprobado en dispositivo por el propietario** (2026-09-05), los ocho puntos:
 
-- [ ] Un trayecto con bus: se ven las dos rectas discontinuas, del origen a la parada y de la
+- [x] Un trayecto con bus: se ven las dos rectas discontinuas, del origen a la parada y de la
       bajada al destino
-- [ ] Un destino tan cerca que sale `walkOnly`: **ahora se dibuja algo**, que hoy no pasaba
-- [ ] Con cuatro alternativas, solo la destacada dibuja sus caminatas
-- [ ] Dejar pasar la hora de un autobús: la fila dice "Ya ha salido" sin tocar nada
-- [ ] Actualizar, con el botón y tirando hacia abajo: sale el siguiente y el trazado no parpadea
-- [ ] El pie dice a qué hora se calculó, y con hora fija de salida no lo dice
-- [ ] La línea discontinua se distingue de la continua a la escala a la que abre el mapa
-- [ ] El botón de actualizar no queda debajo del pulgar del gesto de arrastrar la hoja
+- [x] Un destino tan cerca que sale `walkOnly`: **ahora se dibuja algo**, que antes no pasaba
+- [x] Con cuatro alternativas, solo la destacada dibuja sus caminatas
+- [x] Dejar pasar la hora de un autobús: la fila dice "Ya ha salido" sin tocar nada
+- [x] Actualizar, con el botón y tirando hacia abajo: sale el siguiente y el trazado no parpadea
+- [x] El pie dice a qué hora se calculó, y con hora fija de salida no lo dice
+- [x] La línea discontinua se distingue de la continua a la escala a la que abre el mapa
+- [x] El botón de actualizar no queda debajo del pulgar del gesto de arrastrar la hoja
 
 
 
