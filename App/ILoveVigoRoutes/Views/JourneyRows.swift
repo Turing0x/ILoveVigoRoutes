@@ -115,19 +115,30 @@ struct JourneyLegRow: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Text("Caminar de \(from.label) a \(to.label), \(Int(metres.rounded())) metros"))
 
-        case .ride(_, let routeShortName, let headsign, _, let board, let alight,
+        case .ride(let routeID, let routeShortName, let headsign, _, let board, let alight,
                   let departure, let arrival, let intermediateStops):
-            HStack(alignment: .top, spacing: 10) {
-                LineBadge(name: routeShortName)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(board.name) → \(alight.name)").font(.subheadline).lineLimit(2)
-                    if let headsign, !headsign.isEmpty {
-                        Text(headsign).font(.caption2).foregroundStyle(.secondary)
+            // The whole day of this line at this stop is one tap from here. It is the question
+            // a missed bus produces — "and the next one, and the one after that" — and the
+            // route list only ever shows the next couple of departures.
+            NavigationLink {
+                LineTimetableView(stop: board, routeID: routeID, routeShortName: routeShortName)
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    LineBadge(name: routeShortName)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(board.name) → \(alight.name)").font(.subheadline).lineLimit(2)
+                        if let headsign, !headsign.isEmpty {
+                            Text(headsign).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text(stopsText(departure: departure, arrival: arrival,
+                                       intermediateStops: intermediateStops))
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text("Ver todos los horarios de la \(routeShortName) en \(board.name)")
+                            .font(.caption2)
+                            .foregroundStyle(.indigo)
                     }
-                    Text(stopsText(departure: departure, arrival: arrival, intermediateStops: intermediateStops))
-                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
             // A ride row names two stops, board and alight, so a single swipe would be
