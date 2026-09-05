@@ -152,7 +152,11 @@ final class MapScreenModel {
     /// One door out for every mode, rather than a different rule per gesture — the same
     /// argument behind `MapNavigationState.dismiss` being a single table. `dismiss()` is the
     /// one that walks back a level; this is the X and the drag-to-close.
-    func closeSheet() { state.reset() }
+    func closeSheet() {
+        state.reset()
+        drawn = DrawnRoute()
+        plannedAt = nil
+    }
 
     /// A saved journey, planned whole. Both ends come from what the user stored, so there is
     /// nothing to ask the GPS.
@@ -164,12 +168,36 @@ final class MapScreenModel {
 
     // MARK: - Ruta
 
-    /// Traces for each alternative, parallel to `state.route.journeys`.
+    /// What the map is drawing: the alternatives and their traces, always in step.
     ///
+    /// The two travel together on purpose. `JourneyOverviewMapContent` indexes one by the
+    /// other, so a version of this where the journeys came from `state` and the traces from
+    /// here could be caught mid-update with the two disagreeing.
+    ///
+    /// It also outlives a re-plan. `state.route` empties the moment a query starts, and
+    /// drawing from it meant the route under the sheet vanished for the duration — which on a
+    /// manual refresh is a blink of exactly the thing the user asked to keep. This is replaced
+    /// only when there is something new to replace it with.
+    struct DrawnRoute {
+        var journeys: [Journey] = []
+        var traces: [[JourneyTrace]] = []
+
+        var isEmpty: Bool { journeys.isEmpty }
+    }
+
     /// Built once per result and never in `body`: reading a ridden shape is a SQLite hit per
     /// ride leg, and with four alternatives that is up to sixteen.
-    private(set) var traces: [[JourneyTrace]] = []
+    private(set) var drawn = DrawnRoute()
     private(set) var planningFailure: String?
+
+    /// When the answer on screen was computed, or `nil` when there is none.
+    ///
+    /// Shown to the user rather than acted on. A route list is a photograph of a moment, and
+    /// the moment matters: miss the bus and every time on it is wrong. Nothing re-plans on its
+    /// own — that would shuffle the list under a finger already reading it, and could move the
+    /// highlighted alternative out from under the map — so the app says how old the answer is
+    /// and leaves the decision where it belongs.
+    private(set) var plannedAt: Date?
 
     /// Why "Cómo llegar" cannot run yet, or `nil` when it can.
     ///
@@ -203,19 +231,37 @@ final class MapScreenModel {
     func plan() async {
         guard let query = state.routeQuery(now: Date()) else { return }
         planningFailure = nil
-        traces = []
         state.planningStarted()
         do {
             let result = try await planner.plan(query)
             state.planningFinished(result.outcome)
-            await buildTraces()
+            plannedAt = Date()
+            await redraw()
         } catch {
             // A thrown error is not the same as "no route found", and must not borrow its
             // wording — `PlanOutcome` has seven honest ways to say the latter.
             state.planningFailed()
+            plannedAt = nil
+            drawn = DrawnRoute()
             planningFailure = (error as? CustomStringConvertible)?.description
                 ?? error.localizedDescription
         }
+    }
+
+    /// Ask again, now.
+    ///
+    /// The gesture that answers "the bus I was told about has gone". With `.now` as the
+    /// departure this genuinely produces the next one, because the query is built from the
+    /// clock at the moment it runs; with a fixed departure time the answer is the same one and
+    /// only its age changes, which is honest — nothing about a 15:40 departure moves because
+    /// it is now 15:20.
+    ///
+    /// The realtime annotations ride along with whatever `ThrottledRealtimeProvider` is willing
+    /// to serve. **The 20 s throttle is not bypassed**: those endpoints have no official API,
+    /// and the handoff makes not hammering them an obligation rather than a courtesy. Inside
+    /// the window this returns the cached answer, and no text promises otherwise.
+    func refresh() async {
+        await plan()
     }
 
     func setOrigin(_ place: MapPlace) async {
@@ -252,18 +298,26 @@ final class MapScreenModel {
 
     /// Traces for the highlighted alternative only, for whatever draws exactly one.
     var selectedTraces: [JourneyTrace] {
-        traces.indices.contains(state.selectedAlternative) ? traces[state.selectedAlternative] : []
+        drawn.traces.indices.contains(state.selectedAlternative)
+            ? drawn.traces[state.selectedAlternative] : []
     }
 
-    private func buildTraces() async {
+    /// Replaces what the map draws with the result that just came in.
+    ///
+    /// The single writer of `drawn`, so its two halves cannot drift apart.
+    private func redraw() async {
         let journeys = state.route.journeys
-        guard !journeys.isEmpty else { return }
+        guard !journeys.isEmpty else {
+            drawn = DrawnRoute()
+            return
+        }
         let repository = self.repository
         // Off the main actor. `.task` alone would still run this here, because reading the
         // shapes has no suspension point of its own.
-        traces = await Task.detached(priority: .userInitiated) {
+        let traces = await Task.detached(priority: .userInitiated) {
             journeys.map { JourneyTraceBuilder.traces(for: $0, repository: repository) }
         }.value
+        drawn = DrawnRoute(journeys: journeys, traces: traces)
     }
 
     /// Straight-line distance from the device to a place, already worded. `nil` when there is

@@ -102,4 +102,46 @@ struct FirstBoardingMatchTests {
             departure: now, arrival: now.addingTimeInterval(600), transfers: 0)
         #expect(FirstBoardingMatch.firstRide(of: journey) == nil)
     }
+
+    // MARK: - Se ha ido el autobús
+
+    /// Un trayecto con **cinco minutos de caminata de acceso**: `Journey.departure` es cinco
+    /// minutos anterior al embarque, y ahí es donde está la diferencia. Comparar contra
+    /// `departure` daría el trayecto por perdido mientras el autobús sigue sin pasar.
+    private func journeyWithAccessWalk() -> Journey {
+        let a = PlannerFixture.stop("A")
+        let b = PlannerFixture.stop("B", northMetres: 1_000)
+        let origin = Place.coordinate(Coordinate(latitude: 42.2, longitude: -8.7), label: "O")
+        let destination = Place.coordinate(Coordinate(latitude: 42.3, longitude: -8.6), label: "D")
+        return Journey(legs: [
+            .walk(from: origin, to: .stop(a), seconds: 300, metres: 400),
+            .ride(routeID: RouteID("r1"), routeShortName: "15", headsign: nil, tripID: TripID("t1"),
+                  board: a, alight: b,
+                  departure: now.addingTimeInterval(300), arrival: now.addingTimeInterval(900),
+                  intermediateStops: []),
+            .walk(from: .stop(b), to: destination, seconds: 120, metres: 150)
+        ], departure: now, arrival: now.addingTimeInterval(1_020), transfers: 0)
+    }
+
+    @Test("«Ya ha salido» se mide contra el embarque, no contra la hora de empezar a andar")
+    func departureIsTheBoardingNotTheWalk() {
+        let journey = journeyWithAccessWalk()
+        // Un segundo después de `Journey.departure`, que es cuando habría que echar a andar.
+        // El autobús aún tarda cinco minutos: no se ha ido nada.
+        #expect(FirstBoardingMatch.hasDeparted(journey, now: now.addingTimeInterval(1)) == false)
+        // Justo en el embarque tampoco: la puerta todavía está abierta.
+        #expect(FirstBoardingMatch.hasDeparted(journey, now: now.addingTimeInterval(300)) == false)
+        // Un segundo después del embarque, sí.
+        #expect(FirstBoardingMatch.hasDeparted(journey, now: now.addingTimeInterval(301)))
+    }
+
+    @Test("Un trayecto solo a pie no se escapa nunca")
+    func walkOnlyNeverDeparts() {
+        let origin = Place.coordinate(Coordinate(latitude: 42.2, longitude: -8.7), label: "O")
+        let destination = Place.coordinate(Coordinate(latitude: 42.21, longitude: -8.69), label: "D")
+        let journey = Journey(
+            legs: [.walk(from: origin, to: destination, seconds: 600, metres: 800)],
+            departure: now, arrival: now.addingTimeInterval(600), transfers: 0)
+        #expect(FirstBoardingMatch.hasDeparted(journey, now: now.addingTimeInterval(86_400)) == false)
+    }
 }

@@ -10,17 +10,25 @@ import VigoCore
 struct MapRouteSheet: View {
     let state: MapNavigationState
     let failure: String?
+    /// When the answer on screen was computed, or `nil` when there is none.
+    let plannedAt: Date?
     /// Live first-boarding annotations, keyed by journey. Empty is the normal case.
     let live: (Journey) -> Arrival?
     let onPick: (PlacePickerRole, MapPlace) -> Void
     let onSwap: () -> Void
     let onDeparture: (MapNavigationState.Departure) -> Void
+    let onRefresh: () async -> Void
     let onSelect: (Int) -> Void
     let onOpen: () -> Void
     let onCloseDetail: () -> Void
     let onFollow: () -> Void
     let onStopFollowing: () -> Void
     let onClose: () -> Void
+
+    /// Ticks while the sheet is open so "hace N min" and "Ya ha salido" stop being a
+    /// photograph of the moment the list arrived. Nothing re-plans on this: it only re-reads
+    /// the clock, and every time on screen is still the one the planner committed to.
+    @State private var now = Date()
 
     /// Which end is being replaced, or `nil` when neither is.
     ///
@@ -80,10 +88,24 @@ struct MapRouteSheet: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Cómo llegar")
             .navigationBarTitleDisplayMode(.inline)
+            // Both gestures, not one. Pulling down is invisible and this sheet opens at a
+            // detent where there is not always slack for it; the button is the one a user
+            // who has just missed a bus can find.
+            .refreshable { await onRefresh() }
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Actualizar", systemImage: "arrow.clockwise") {
+                        Task { await onRefresh() }
+                    }
+                    .disabled(state.route.isPlanning)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Cerrar", action: onClose)
                 }
+            }
+            // A minute is the resolution of everything shown here, so a minute is the tick.
+            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) {
+                now = $0
             }
             // Driven from `mode` rather than from a local `NavigationLink` so that going
             // back lands where `MapNavigationState.dismiss` says it should — which, while
@@ -184,6 +206,7 @@ struct MapRouteSheet: View {
         } else if !state.route.journeys.isEmpty {
             Section {
                 ForEach(Array(state.route.journeys.enumerated()), id: \.offset) { index, journey in
+                    let gone = FirstBoardingMatch.hasDeparted(journey, now: now)
                     Button {
                         // Tapping the highlighted one again opens it. Tapping another
                         // highlights it first — so the map redraws before anyone commits to a
@@ -191,7 +214,8 @@ struct MapRouteSheet: View {
                         if index == state.selectedAlternative { onOpen() } else { onSelect(index) }
                     } label: {
                         HStack(spacing: 10) {
-                            JourneyAlternativeRow(journey: journey, live: live(journey))
+                            JourneyAlternativeRow(journey: journey, live: live(journey),
+                                                  hasDeparted: gone)
                             if index == state.selectedAlternative {
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
@@ -200,17 +224,38 @@ struct MapRouteSheet: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    // Dimmed, not hidden. A bus that has gone is still the answer to what the
+                    // user asked, and removing rows underneath a finger is worse than fading
+                    // them: the honest move is to say so and leave the choice.
+                    .opacity(gone ? 0.5 : 1)
                     .listRowBackground(index == state.selectedAlternative
                                        ? Color.indigo.opacity(0.12) : nil)
                 }
             } header: {
                 Text(state.route.isWalkOnly ? "A pie" : "Alternativas (\(state.route.journeys.count))")
             } footer: {
-                if state.route.isWalkOnly {
-                    Text(PlanOutcomeMessage.walkOnlyExplanation)
+                VStack(alignment: .leading, spacing: 4) {
+                    if state.route.isWalkOnly {
+                        Text(PlanOutcomeMessage.walkOnlyExplanation)
+                    }
+                    if let age = ageText {
+                        Text(age)
+                    }
                 }
             }
         }
+    }
+
+    /// How old the answer is, or `nil` when saying so would be noise.
+    ///
+    /// Only with `.now` as the departure. A journey asked for at a fixed hour does not go
+    /// stale — nothing about a 15:40 bus changes because it is now 15:20 — and putting a
+    /// timestamp on it would invite a refresh that cannot return anything different.
+    private var ageText: String? {
+        guard case .now = state.departure, let plannedAt else { return nil }
+        let minutes = Int(now.timeIntervalSince(plannedAt) / 60)
+        guard minutes >= 1 else { return "Calculado ahora mismo." }
+        return "Calculado hace \(minutes) min. Desliza hacia abajo para volver a preguntar."
     }
 }
 

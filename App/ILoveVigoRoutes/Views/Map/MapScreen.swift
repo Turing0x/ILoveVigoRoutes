@@ -111,9 +111,13 @@ struct MapScreen: View {
                            coordinate: place.coordinate.clLocation)
                         .tint(.red)
                 }
-                if !model.state.route.journeys.isEmpty {
-                    JourneyOverviewMapContent(journeys: model.state.route.journeys,
-                                              traces: model.traces,
+                // Drawn from the model's own pair and not from `state.route`, so a re-plan
+                // does not blank the route for the length of the query. Gated on the mode
+                // instead: the route is on the map because the route flow is open, and
+                // closing the sheet takes it away.
+                if isRouting(model), !model.drawn.isEmpty {
+                    JourneyOverviewMapContent(journeys: model.drawn.journeys,
+                                              traces: model.drawn.traces,
                                               selected: model.state.selectedAlternative)
                 }
             }
@@ -182,18 +186,27 @@ struct MapScreen: View {
                 else { return }
                 Task { await model.route(savedJourney: requested) }
             }
+            // Realtime is asked for once per result, and only for what is on screen. Never in
+            // the background: these endpoints are unofficial, and §8 of the handoff makes not
+            // polling them an obligation rather than a nicety.
+            //
+            // Hangs off the answer and not off what is drawn, so the annotations are asked for
+            // as soon as the planner replies, without waiting on the shape reads.
+            .onChange(of: model.state.route.journeys) { _, journeys in
+                live?.refresh(for: journeys)
+            }
             // Framing follows the answer, not the question: as soon as there are routes, the
             // camera opens on all of them rather than staying on the destination pin.
-            .onChange(of: model.state.route.journeys) { _, journeys in
-                // Realtime is asked for once per result, and only for what is on screen.
-                // Never in the background: these endpoints are unofficial, and §8 of the
-                // handoff makes not polling them an obligation rather than a nicety.
-                live?.refresh(for: journeys)
+            //
+            // Driven by what is actually drawn, so the journeys and the traces it frames are
+            // the same pair. Hanging it off `state.route.journeys` would fire while `drawn`
+            // still held the previous result and frame one route with another's geometry.
+            .onChange(of: model.drawn.journeys) { _, journeys in
                 guard !journeys.isEmpty else { return }
-                frame(journeys: journeys, traces: model.traces)
+                frame(journeys: journeys, traces: model.drawn.traces)
             }
             .onChange(of: model.state.selectedAlternative) { _, _ in
-                frame(journeys: model.state.route.journeys, traces: model.traces)
+                frame(journeys: model.drawn.journeys, traces: model.drawn.traces)
             }
             .overlay(alignment: .top) { hint(model) }
             .overlay(alignment: .topTrailing) { controls(model) }
@@ -235,6 +248,7 @@ struct MapScreen: View {
             MapRouteSheet(
                 state: model.state,
                 failure: model.planningFailure,
+                plannedAt: model.plannedAt,
                 live: { live?.match(for: $0) },
                 onPick: { role, place in
                     Task {
@@ -246,6 +260,7 @@ struct MapScreen: View {
                 },
                 onSwap: { Task { await model.swapEnds() } },
                 onDeparture: { departure in Task { await model.setDeparture(departure) } },
+                onRefresh: { await model.refresh() },
                 onSelect: { model.selectAlternative(at: $0) },
                 onOpen: { model.openSelectedAlternative() },
                 onCloseDetail: { model.dismiss() },
@@ -267,6 +282,12 @@ struct MapScreen: View {
             // placeholder that could flash during the dismiss animation.
             EmptyView()
         }
+    }
+
+    /// Whether the route flow is the thing on screen, and so whether the map should be
+    /// drawing a route at all.
+    private func isRouting(_ model: MapScreenModel) -> Bool {
+        model.state.mode == .routing || model.state.mode == .journeyDetail
     }
 
     /// Opens the camera on every alternative at once, lifted clear of the sheet.
