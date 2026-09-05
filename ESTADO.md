@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: 3/11 pasos (sonda, máquina de estados, mensajes) |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 4/11 pasos. El mapa ya arranca limpio |
 
 ---
 
@@ -560,6 +560,60 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
   Suite de `VigoCore`: **221 tests en verde** (+10). El target de app compila en Debug y
   Release contra `generic/platform=iOS`.
 
+- [x] **3/11 — `MapScreen`: el mapa arranca limpio y las paradas son una capa**
+  `VigoCore/Sources/VigoCore/MapFlow/MapStopsLayer.swift` (nuevo),
+  `App/ILoveVigoRoutes/Views/Map/MapScreen.swift` y `MapScreenModel.swift` (nuevos),
+  `RootView.swift` apunta ahí; **`Views/StopsMapView.swift` eliminada**.
+  Tests: `MapStopsLayerTests.swift` (8).
+
+  Cumple la segunda exigencia del propietario: *"no quiero que muestres directamente todas
+  las paradas... por defecto quiero que no se vean, el mapa limpio"*. La preferencia vive en
+  `UserDefaults` bajo `map.stopsVisible`, y no hace falta sembrarla: `UserDefaults.bool`
+  devuelve `false` para una clave que nunca se escribió, que es justo el valor por defecto
+  que se quiere.
+
+  **Desviación del plan, deliberada.** El plan metía aquí la cápsula de búsqueda flotante y
+  dejaba borrar `StopsMapView` para el paso 4. Se ha hecho al revés: la cápsula se va al
+  paso 5, con la hoja de búsqueda que le da sentido —una barra que no hace nada es peor que
+  ninguna barra—, y `StopsMapView` se borra ya, porque `MapScreen` alcanza su paridad
+  completa en este mismo paso (selección de parada incluida, que sigue abriendo
+  `StopDetailView` en una hoja). Así no conviven dos mapas divergiendo entre commits.
+
+  **Lo que este paso NO hace todavía, a propósito:** no toca
+  `mapFeatureSelectionAccessory`. Apagar la tarjeta nativa de Apple antes de tener una ficha
+  propia que poner en su lugar dejaría el mapa peor durante un commit — tocar un POI no haría
+  absolutamente nada. Entra en el paso 4, junto con la ficha.
+
+  **`MapStopsLayer` sale de la vista y arregla una ambigüedad real de camino.** El método
+  privado de `StopsMapView` devolvía un array vacío en dos situaciones distintas —no hay
+  paradas aquí, y hay demasiadas para dibujarlas— y la vista adivinaba entre ellas con
+  `visibleStops.isEmpty && !allStops.isEmpty`. Con esa condición, asomarse al mar o a
+  Redondela pintaba "acerca el mapa para ver las paradas" sobre un sitio donde no hay
+  ninguna que acercar. Ahora son dos casos de un enum y el aviso además dice cuántas hay.
+
+  **Un intento de optimización, revertido en el acto.** La primera versión salía del bucle al
+  pasar del límite y luego contaba el resto — lo que metía un `firstIndex(of:)` dentro del
+  bucle, o sea O(n²) accidental, para ahorrar un filtro sobre 1149 filas. Sustituido por un
+  `filter` de una pasada, con el motivo escrito en el propio fichero.
+
+  **Verificado por mutación, cinco veces, y una se coló.** (1) "demasiadas" devolviendo lista
+  vacía en vez del motivo; (2) límite exclusivo en vez de inclusivo; (3) el recuadro sin
+  recortar por longitud; (4) span sin valor absoluto; (5) **media anchura sin dividir**.
+  La (5) pasó desapercibida: el test del recorte usaba una parada a 20 km, que queda fuera
+  con o sin el fallo, así que un error de factor 2 en el borde no lo veía nadie. Añadido
+  `edgeIsHalfTheSpan`, con una parada a 600 m de un borde que está a 556 m — dentro de una
+  anchura entera pero fuera de media. Con él, la mutación (5) y su gemela en longitud caen
+  las dos. Es el mismo patrón que la Fase 3 documentó en su paso 3/11: los tests en verde no
+  bastan si la red de pruebas no tiene la forma para exponer el fallo.
+
+  Suite de `VigoCore`: **229 tests en verde** (+8). Debug y Release compilan.
+
+  **Pendiente de comprobar en dispositivo** (lo hace el propietario): que el mapa arranca sin
+  ninguna parada; que el conmutador las muestra y las oculta; que la preferencia sobrevive a
+  matar y relanzar la app; que al alejarse sale el aviso con el número; y que tocar una
+  parada sigue abriendo su detalle como antes.
+
+
 
 
 ## Verificación rápida del estado
@@ -569,9 +623,9 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **221 tests de `VigoCore` en verde** (170 antes de la Fase 4;
-+24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +27 en la
-Fase 5 entre `MapNavigationStateTests` y `PlanOutcomeMessageTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+Al escribir este documento: **229 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +35 en la
+Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests` y `MapStopsLayerTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
 apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
 

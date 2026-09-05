@@ -1,7 +1,7 @@
 import SwiftUI
 import MapKit
 
-/// Drop-a-pin-at-the-centre picker, the same idiom `StopsMapView` already uses for its own
+/// Drop-a-pin-at-the-centre picker, the same idiom `MapScreen` uses for its own
 /// camera — a fixed pin and a moving map, rather than a draggable annotation, so there is
 /// nothing to hit-test.
 struct MapPointPickerView: View {

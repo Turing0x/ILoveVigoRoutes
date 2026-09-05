@@ -10,7 +10,7 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $selection) {
             Tab("Mapa", systemImage: "map.fill", value: AppTab.map) {
-                StopsMapView()
+                MapScreen()
             }
             Tab("Planificar", systemImage: "arrow.triangle.turn.up.right.diamond",
                 value: AppTab.planner) {
