@@ -1052,9 +1052,51 @@ de qué tenía que cumplir el mapa antes de que la pestaña pudiera desaparecer.
   Suite de `VigoCore`: **265 tests en verde** (+3).
 
 **Cuando las once estén:** quitar `.planner` de `AppTab`, borrar `PlannerView.swift` y
-`App/ILoveVigoRoutesTests/PlannerModelTests.swift`. `PlacePickerView` **sobrevive**: la usa
-`SavedPlaceEditorView`, aunque podrá adelgazarse. Ese trabajo es una sesión corta y no es esta
-fase.
+`App/ILoveVigoRoutesTests/PlannerModelTests.swift`.
+
+## Fase 7 — Un solo buscador, dos pestañas
+
+Una auditoría externa señaló que `PlacePickerView` y `MapSearchSheet` eran casi el mismo
+buscador —paradas contra SQLite por pulsación, direcciones con debounce de 300 ms, lugares
+guardados, trayectos guardados, favoritas— ya divergiendo en comportamiento, y que el propio
+código anticipaba absorber también las pestañas Buscar y Cercanas en el mapa. Son dos
+trabajos independientes: `PlacePickerView` no lo usaba ninguna pestaña, sino los dos
+editores de Favoritas.
+
+**Paso 1 — llegadas en la ficha de lugar del mapa.** Prerrequisito de todo lo demás: sin
+esto, absorber Cercanas habría convertido un toque en tres. `StopArrivalsSummary` y
+`StopArrivalsFeed` (nuevos, `App/ILoveVigoRoutes/Views/`) se extraen de
+`FavouriteStopCard`; `MapPlaceSheet` los usa para mostrar los próximos pasos de una parada
+sin pasar por `StopDetailView`, cuyo enlace pasa a llamarse "Ver horario y detalles".
+
+**Paso 2 — `PlacePickerView` eliminado.** `PlacePickerRole` se mueve a su propio fichero
+(`Map/PlacePickerRole.swift`) para que `MapSearchSheet` no dependa del tipo que va a
+desaparecer. `MapSearchSheet.Purpose` gana `.standalone(title:)`; el sheet añade "Mi
+ubicación", "Elegir en el mapa" (en los tres propósitos, incluido `.explore` — es la ruta
+accesible a "soltar un pin en cualquier sitio", que la pulsación larga del mapa no ofrece a
+VoiceOver) y el swipe "Guardar" en filas de parada y dirección. `SavedPlaceEditorView` y
+`SavedJourneyEditorView` pasan a usar `MapSearchSheet(purpose: .standalone(...))`; de paso,
+`EndpointPickerSheet` deja de forzar `.adHoc` en todo lo que elegía —perdiendo el enlace vivo
+a un lugar guardado— y usa `MapPlace.savedEndpointInput`, que ya aplicaba las reglas
+correctas y nadie llamaba desde aquí.
+
+**Paso 3 — "Cerca de ti" y "Líneas con servicio".** Dos secciones nuevas en el estado vacío
+de `MapSearchSheet`: la primera con `nearbyStops` a radio fijo de 800 m (sin selector — tenía
+sentido como pantalla entera, no como sección de un sheet), la segunda con
+`routesWithService`, filas no interactivas porque no existe consulta stopID-por-routeID en
+el repositorio para filtrar la capa de paradas por línea. Ambas cargan fuera del main actor
+con `Task.detached`; la de cercanía usa `.task(id:)` sobre una coordenada redondeada a
+~11 m para no relanzar la consulta en cada jitter de GPS. La búsqueda con texto matchea
+también nombres de línea, no solo códigos de parada.
+
+**Paso 4 — fuera las pestañas Buscar y Cercanas.** Ambas eran subconjuntos de lo que
+`MapSearchSheet` ya cubría. Quedan dos pestañas: Mapa y Favoritas. `nearbyStops`,
+`NearbyStop` y `routesWithService` se quedan en `VigoCore` — los usa `JourneyPlanner` y
+`TimetableBuilder` además del propio buscador.
+
+Neto: −255 líneas aproximadamente, un buscador en vez de dos, un hueco de accesibilidad
+cerrado y un bug de "Duplicar"/edición de trayectos corregido de paso. 273 tests de
+`VigoCore` sin cambios (esta fase no toca el paquete); 16 tests del target de app en verde.
 
 
 
@@ -1076,8 +1118,11 @@ Al escribir este documento: **273 tests de `VigoCore` en verde** (170 antes de l
 Fase 5 entre `MapNavigationStateTests`, `PlanOutcomeMessageTests`, `MapStopsLayerTests`,
 `MapPlaceLabelsTests`, `CoordinateBoundsTests`, `FirstBoardingMatchTests` y
 `JourneySummaryTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
-apuntando al archivo publicado, y **17 tests del target de app** (eran 23 hasta que la Fase 6 se llevó
-`PlannerModelTests` con la pestaña que probaba).
+apuntando al archivo publicado, y **16 tests del target de app** (eran 23 hasta que la Fase 6 se llevó
+`PlannerModelTests` con la pestaña que probaba; la cifra de 17 que este documento citaba
+después de la Fase 6 no coincide con lo que arroja `xcodebuild test` hoy — ni `PlacePickerView`
+ni ninguna vista tocada en la Fase 7 tenían tests propios, así que la diferencia es anterior
+a esta fase).
 
 Desde la Fase 5 el propietario prueba **solo en dispositivo**, no en simulador. Aquí se
 verifica con `swift test` (que corre en el Mac) y con compilación contra

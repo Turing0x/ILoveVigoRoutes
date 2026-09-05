@@ -120,6 +120,7 @@ impida confundirlos.
 | Fase 4 — Pulido y comodidades | **Parcial**: lugares y trayectos guardados (CRUD completo), refresco del GTFS en segundo plano, orden de pestañas y estrella de favorito unificada. Quedan fuera, por decisión: widget de pantalla de inicio, atajos de Siri, accesibilidad exhaustiva |
 | **Fase 5** — El mapa como planificador | **Completa** |
 | **Fase 6** — Retirada de lo viejo | **Completa**: fuera la pestaña "Planificar" y el detalle de trayecto aparte |
+| **Fase 7** — Un solo buscador, dos pestañas | **Completa**: llegadas en la ficha de lugar del mapa, `PlacePickerView` eliminado en favor de `MapSearchSheet` (con "Mi ubicación", "Elegir en el mapa" y guardar en swipe), secciones "Cerca de ti" y "Líneas con servicio", y fuera las pestañas Buscar y Cercanas |
 
 ### Fase 5 — el mapa es el planificador
 
