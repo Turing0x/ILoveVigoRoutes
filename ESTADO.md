@@ -14,7 +14,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | Fase 2 — Ferry de la ría | ⬜ No empezada |
 | **Fase 3 — Planificador de rutas (RAPTOR)** | ✅ Completa (solo bus) |
 | Fase 4 — Pulido y comodidades | 🟡 Parcial: lugares/trayectos guardados, refresco en segundo plano, orden de pestañas, estrella unificada. Sin widget, atajos de Siri ni accesibilidad |
-| **Fase 5 — El mapa como planificador** | 🟡 En curso: paso 0 (sonda de MapKit) hecho |
+| **Fase 5 — El mapa como planificador** | 🟡 En curso: 2/11 pasos (sonda + máquina de estados) |
 
 ---
 
@@ -458,6 +458,66 @@ sigue viva a propósito hasta que el mapa cubra la lista de paridad de 11 puntos
 
   La sonda y su botón de DEBUG se eliminan en el commit que cierra este paso.
 
+- [x] **1/11 — `MapPlace` + `MapNavigationState`, en `VigoCore`**
+  `VigoCore/Sources/VigoCore/MapFlow/MapPlace.swift`, `MapNavigationState.swift`;
+  tests en `VigoCore/Tests/VigoCoreTests/MapNavigationStateTests.swift` (17 tests).
+
+  **Desviación del plan, por la restricción de "sin simulador".** El plan situaba
+  `MapScreenModel` entero en el target de app. Los tests del target de app necesitan un
+  simulador para correr, así que aquí no habría podido verificar nada yo. El tipo se parte en
+  dos por esa línea:
+  - `MapNavigationState` — **`struct` en `VigoCore`**, con todas las transiciones como
+    métodos `mutating` puros. Es el 100% de la lógica del flujo, y lo cubre `swift test` en
+    el Mac sin simulador ni dispositivo.
+  - `MapScreenModel` — el `@Observable @MainActor` del target de app, que poseerá uno de
+    estos y añadirá solo lo que de verdad necesita un dispositivo: la llamada al planificador,
+    el geocodificador, `@AppStorage` y CoreLocation. Se escribe en el paso 3, con la vista.
+
+  No es un contorsionismo para poder probar: la partición cae donde ya estaba la costura. Lo
+  que queda en la app es exactamente lo que no es una función pura del estado.
+
+  `MapPlace` es `Place` más procedencia (`.stop` / `.pointOfInterest` / `.address` /
+  `.savedPlace` / `.droppedPin` / `.currentLocation`), porque `Place` aplana en
+  `.coordinate(_, label:)` todo lo que no es parada y la ficha del mapa necesita saber si hay
+  una `Stop` detrás (llegadas en vivo, estrella de favorito), qué escribir de subtítulo y qué
+  glifo dibujar. La Fase 3 ya había tenido que recuperar **un** bit de eso con `PickedPlace`;
+  aquí hacen falta más. `Origin.pointOfInterest` no lleva `MKPointOfInterestCategory`: MapKit
+  no entra en este paquete, y su valor crudo (`MKPOICategoryStore`) no es texto para enseñar
+  a nadie — la app lo traduce antes de construir el `MapPlace`. Es el hallazgo menor del
+  paso 0, ya cerrado.
+
+  `MapNavigationState` fija la regla que sostiene la pantalla: **las vistas no deciden
+  transiciones**. Un gesto se traduce en una llamada, y la vista dibuja lo que dice `mode`.
+  Lo que hay dentro, con su razón:
+  - `dismiss()` es **una sola tabla**: `.journeyDetail → .routing → ficha del destino →
+    mapa limpio`, con `.browsing` como suelo. Repartida entre los gestos de la hoja (arrastrar,
+    X, tocar fuera) dejaría de ser predecible, que es justo lo que se nota al usarla.
+  - `clearSelection()` existe por el **hallazgo nº 1 del paso 0**: deseleccionar deja un
+    `MapSelection` no nulo y vacío, así que la vista no puede usar "binding != nil" como
+    "hay selección". Y solo cierra la ficha: deseleccionar un pin no cancela una ruta.
+  - `invalidateResult()` tira el resultado en cuanto cambia la pregunta. Sin él, el mapa
+    seguiría pintando el trazado anterior bajo unos extremos recién editados, y un detalle
+    abierto sería el de una ruta que ya nadie pidió.
+  - `planningFinished(.journeys([]))` **no** es un éxito vacío: se pliega a fallo. Una lista
+    vacía en pantalla diría "hay opciones y no caben" cuando lo cierto es que no hay ninguna.
+  - `originFollowsLocation` repite el contrato que la Fase 3 fijó para `PlannerModel`, y
+    `swapEnds()` lo apaga: sin eso, el siguiente fix del GPS deshace el intercambio en
+    silencio.
+  - `routeQuery(now:)` recibe el reloj en vez de leerlo, por la misma razón que el paso de
+    deuda de la Fase 3 (`f4a1282`) tuvo que arreglar en `GTFSImporter`: un test que depende
+    de la hora real solo pasa a ciertas horas.
+
+  **Verificado por mutación, seis veces** — los 17 tests pasaron a la primera, que es
+  exactamente la señal que el paso 3/11 de la Fase 3 dejó escrita como sospechosa. Cada una de
+  estas mutaciones tumba al menos un test: (1) `swapEnds` sin apagar el seguimiento del GPS;
+  (2) `invalidateResult` sin salir del detalle; (3) `clearSelection` sin el guard de modo;
+  (4) lista vacía tratada como éxito; (5) `dismiss` saltando del detalle al mapa limpio;
+  (6) `selectAlternative` sin comprobar el índice.
+
+  Suite de `VigoCore`: **211 tests en verde** (194 antes de la Fase 5, +17). Target de app sin
+  cambios; Debug y Release compilan contra `generic/platform=iOS`.
+
+
 ## Verificación rápida del estado
 
 ```bash
@@ -465,9 +525,14 @@ cd VigoCore && swift test 2>&1 | tail -3
 xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 git log --oneline -5
 ```
-Al escribir este documento: **194 tests de `VigoCore` en verde** (170 antes de la Fase 4; +19
-en `SavedPlacesTests`, +3 en `MigrationTests`, +2 en `RepositoryTests`), incluida la suite del
-feed real con `VIGO_GTFS_ZIP` apuntando al archivo publicado, y **23 tests del target de app**
-(12 antes de la Fase 4; +5 en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en
-`PlannerModelTests`). Falta la comprobación a mano en dispositivo del seguimiento en
-movimiento, que no se puede hacer desde aquí.
+Al escribir este documento: **211 tests de `VigoCore` en verde** (170 antes de la Fase 4;
++24 en la Fase 4 entre `SavedPlacesTests`, `MigrationTests` y `RepositoryTests`; +17 en la
+Fase 5 en `MapNavigationStateTests`), incluida la suite del feed real con `VIGO_GTFS_ZIP`
+apuntando al archivo publicado, y **23 tests del target de app** (12 antes de la Fase 4; +5
+en `FavouritesStoreTests`, +5 en `SavedPlacesStoreTests`, +1 en `PlannerModelTests`).
+
+Desde la Fase 5 el propietario prueba **solo en dispositivo**, no en simulador. Aquí se
+verifica con `swift test` (que corre en el Mac) y con compilación contra
+`generic/platform=iOS`; los tests del target de app requieren simulador y por tanto los
+ejecuta él. Es la razón por la que la lógica nueva del mapa vive en `VigoCore` y no en la
+app.
