@@ -1,19 +1,19 @@
 import SwiftUI
+import CoreLocation
 import VigoCore
 
 /// Search, inside the map.
 ///
-/// The same four sources `PlacePickerView` covers — stops, addresses, saved places and
-/// favourites — plus saved journeys, and with the same rules, because those rules were
-/// argued once already and have not changed: the stop search runs on every keystroke
-/// (0,2 ms against SQLite over 1149 rows) while the address search waits 300 ms and is fixed
-/// to a Vigo box that never carries the user's position.
+/// The one buscador of the app: stops, addresses, saved places, saved journeys and
+/// favourites, plus the current position and a point dropped on the map — all through
+/// `Purpose`, which is the only thing that changes behaviour here. The stop search runs on
+/// every keystroke (0,2 ms against SQLite over 1149 rows) while the address search waits
+/// 300 ms and is fixed to a Vigo box that never carries the user's position.
 ///
-/// What differs is the outcome. The planner's picker had to *return an endpoint* to a form.
-/// Here a result is a place on the map, so picking one opens its card — the same card a tap
-/// on the map opens — and the route is one more tap from there. That is the Apple Maps shape,
-/// and it is what lets the same sheet serve both "find me somewhere" and "replace this end
-/// of the route".
+/// A picked result is a place on the map, so `.explore` opens its card — the same card a tap
+/// on the map opens — and the route is one more tap from there. That is the Apple Maps shape.
+/// `.endpoint` and `.standalone` hand the place straight back instead, for a route's end or
+/// a saved place's anchor.
 struct MapSearchSheet: View {
     /// What picking a result is *for*, which is the only thing that changes behaviour here.
     enum Purpose: Equatable {
@@ -22,6 +22,10 @@ struct MapSearchSheet: View {
         /// Opened to replace one end of a route. A saved journey contributes just that end,
         /// and offering to plan it whole would throw away the route being edited.
         case endpoint(PlacePickerRole)
+        /// Opened from one of the saved-place/saved-journey editors, to pick a single point.
+        /// Carries its own title because there is no route or map card waiting for the
+        /// answer — the caller decides what this pick is *for*.
+        case standalone(title: String)
     }
 
     @Environment(AppEnvironment.self) private var environment
@@ -40,10 +44,17 @@ struct MapSearchSheet: View {
     @State private var query = ""
     @State private var results: [Stop] = []
     @State private var addresses: AddressSearchModel?
+    /// Only needed for the "Mi ubicación" row and the distance shown nowhere else in this
+    /// sheet — a second `CLLocationManager` alongside the map's own while this is presented
+    /// over it, same as `PlacePickerView` used to run alongside `MapScreen`.
+    @State private var location = LocationProvider()
+    @State private var showingMapPicker = false
+    @State private var savingPlaceFrom: Place?
 
     var body: some View {
         NavigationStack {
             List {
+                header
                 if query.isEmpty {
                     shortcuts
                 } else {
@@ -68,8 +79,27 @@ struct MapSearchSheet: View {
         }
         .task {
             if addresses == nil { addresses = AddressSearchModel(service: environment.addressSearch) }
+            location.requestPermissionIfNeeded()
+            location.start()
         }
-        .onDisappear { addresses?.cancel() }
+        .onDisappear {
+            addresses?.cancel()
+            location.stop()
+        }
+        .sheet(isPresented: $showingMapPicker) {
+            MapPointPickerView { coordinate in
+                pick(.droppedPin(Coordinate(latitude: coordinate.latitude,
+                                            longitude: coordinate.longitude)))
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { savingPlaceFrom != nil },
+            set: { if !$0 { savingPlaceFrom = nil } }
+        )) {
+            if let savingPlaceFrom {
+                SavedPlaceEditorView(mode: .createFrom(savingPlaceFrom))
+            }
+        }
     }
 
     private var title: String {
@@ -77,14 +107,64 @@ struct MapSearchSheet: View {
         case .explore: "Buscar"
         case .endpoint(.origin): "Origen"
         case .endpoint(.destination): "Destino"
+        case .standalone(let title): title
         }
+    }
+
+    // MARK: - Cabecera
+
+    /// "Mi ubicación" only makes sense when the pick is going somewhere specific — the
+    /// route's origin/destination, or a saved place's anchor. `.explore` already tracks the
+    /// device on the map itself, so offering it again here would be a second, redundant
+    /// answer to "where am I".
+    private var showsCurrentLocation: Bool {
+        switch purpose {
+        case .explore: false
+        case .endpoint, .standalone: true
+        }
+    }
+
+    private var header: some View {
+        Section {
+            if showsCurrentLocation {
+                Button {
+                    pickCurrentLocation()
+                } label: {
+                    Label("Mi ubicación", systemImage: "location.fill")
+                }
+                .disabled(location.coordinate == nil)
+            }
+            // Offered in every purpose, `.explore` included: it is the accessible route to
+            // "drop a pin anywhere", the one thing the map's own long-press gesture cannot
+            // reach with VoiceOver.
+            Button {
+                showingMapPicker = true
+            } label: {
+                Label("Elegir en el mapa", systemImage: "mappin.and.ellipse")
+            }
+        }
+    }
+
+    private func pickCurrentLocation() {
+        guard let coordinate = location.coordinate else { return }
+        pick(.currentLocation(Coordinate(latitude: coordinate.latitude,
+                                         longitude: coordinate.longitude)))
     }
 
     // MARK: - Con el campo vacío
 
+    /// A saved journey is either planned whole (`.explore`) or contributes one end
+    /// (`.endpoint`). `.standalone` is picking a single point for something else entirely —
+    /// a saved place's anchor — where neither reading makes sense, so the section that
+    /// offers saved journeys does not apply.
+    private var showsSavedJourneys: Bool {
+        if case .standalone = purpose { return false }
+        return true
+    }
+
     @ViewBuilder
     private var shortcuts: some View {
-        if !environment.savedPlaces.journeys.isEmpty {
+        if showsSavedJourneys, !environment.savedPlaces.journeys.isEmpty {
             Section("Trayectos guardados") {
                 ForEach(environment.savedPlaces.journeys) { journey in
                     Button {
@@ -94,6 +174,8 @@ struct MapSearchSheet: View {
                         case .endpoint(let role):
                             let ends = journey.mapEnds
                             onPick(role == .origin ? ends.origin : ends.destination)
+                        case .standalone:
+                            break
                         }
                     } label: {
                         Label(journey.displayLabel,
@@ -122,7 +204,7 @@ struct MapSearchSheet: View {
             }
         }
 
-        if environment.savedPlaces.journeys.isEmpty,
+        if (!showsSavedJourneys || environment.savedPlaces.journeys.isEmpty),
            environment.savedPlaces.places.isEmpty,
            environment.favourites.stops.isEmpty {
             Text("Busca una parada por nombre o número, o una dirección de Vigo.")
@@ -186,6 +268,16 @@ struct MapSearchSheet: View {
         }
         .buttonStyle(.plain)
         .favouriteActions(for: stop)
+        // Trailing edge, deliberately: `favouriteActions` already owns the leading one, and
+        // the two never conflict since they sit on opposite sides of the row.
+        .swipeActions(edge: .trailing) {
+            Button {
+                savingPlaceFrom = .stop(stop)
+            } label: {
+                Label("Guardar", systemImage: "mappin.circle")
+            }
+            .tint(.indigo)
+        }
     }
 
     private func addressRow(_ suggestion: AddressSuggestion,
@@ -216,6 +308,16 @@ struct MapSearchSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(addresses.resolving != nil)
+        .swipeActions(edge: .trailing) {
+            Button {
+                Task {
+                    if let place = await addresses.resolve(suggestion) { savingPlaceFrom = place }
+                }
+            } label: {
+                Label("Guardar", systemImage: "mappin.circle")
+            }
+            .tint(.indigo)
+        }
     }
 
     private func pick(_ place: MapPlace) {
