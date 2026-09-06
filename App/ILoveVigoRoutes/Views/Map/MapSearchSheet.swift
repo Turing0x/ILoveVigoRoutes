@@ -7,13 +7,18 @@ import VigoCore
 /// The one buscador of the app: stops, addresses, saved places, saved journeys and
 /// favourites, plus the current position and a point dropped on the map — all through
 /// `Purpose`, which is the only thing that changes behaviour here. The stop search runs on
-/// every keystroke (0,2 ms against SQLite over 1149 rows) while the address search waits
-/// 300 ms and is fixed to a Vigo box that never carries the user's position.
+/// every keystroke (0,3 ms against SQLite over 1149 rows, off the main actor) while the
+/// address search waits 300 ms and is fixed to a Vigo box that never carries the user's
+/// position.
 ///
 /// A picked result is a place on the map, so `.explore` opens its card — the same card a tap
 /// on the map opens — and the route is one more tap from there. That is the Apple Maps shape.
 /// `.endpoint` and `.standalone` hand the place straight back instead, for a route's end or
 /// a saved place's anchor.
+///
+/// Which sections show, in what order, and what to say when one is empty is decided by
+/// `SearchLayoutBuilder` in `VigoCore` — a pure function this view only reads, so that
+/// decision runs under `swift test` instead of only being checkable in the simulator.
 struct MapSearchSheet: View {
     /// What picking a result is *for*, which is the only thing that changes behaviour here.
     enum Purpose: Equatable {
@@ -40,6 +45,11 @@ struct MapSearchSheet: View {
     /// the sheet the card is about to appear in — and, worse, race the selection it has just
     /// made. Presented from the route sheet it is a nested sheet that really does close.
     let onCancel: () -> Void
+    /// Resolves a coordinate to a street name. Injectable so a test could stub it; the app
+    /// always uses the real geocoder — the same one `MapScreenModel` uses for a long press,
+    /// so "Elegir en el mapa" (H-33) stops being the one drop-a-pin path that never names
+    /// the point it drops.
+    var resolver: any MapPlaceResolving = MapKitPlaceResolver()
 
     @State private var query = ""
     @State private var results: [Stop] = []
@@ -49,9 +59,13 @@ struct MapSearchSheet: View {
     /// over it, same as `PlacePickerView` used to run alongside `MapScreen`.
     @State private var location = LocationProvider()
     @State private var showingMapPicker = false
+    @State private var resolvingDroppedPin = false
     @State private var savingPlaceFrom: Place?
     @State private var nearby: [NearbyStop] = []
     @State private var lines: [Route] = []
+    /// "Líneas con servicio" starts collapsed to 8 rows (H-24): the section listed all 45,
+    /// none of them tappable, and dwarfed every other section in an otherwise empty sheet.
+    @State private var showingAllLines = false
 
     var body: some View {
         NavigationStack {
@@ -67,12 +81,6 @@ struct MapSearchSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Parada, dirección o lugar")
-            .onChange(of: query) {
-                results = query.isEmpty
-                    ? []
-                    : ((try? environment.repository.searchStops(query)) ?? [])
-                addresses?.update(query: query)
-            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar", action: onCancel)
@@ -99,14 +107,33 @@ struct MapSearchSheet: View {
                                              radiusMetres: 800, limit: 8)) ?? []
             }.value
         }
+        // Off the main actor, like `lines`/`nearby` above: at 1154 real stops this query is
+        // sub-millisecond, but it was still running synchronously in `.onChange` before,
+        // blocking the next `body` redraw on every keystroke for no reason the other two
+        // queries on this same screen don't already avoid. `.task(id:)` also cancels a
+        // superseded keystroke's query on its own, which `.onChange` never did.
+        .task(id: query) {
+            addresses?.update(query: query)
+            guard !query.isEmpty else { results = []; return }
+            let repository = environment.repository
+            let q = query
+            results = await Task.detached(priority: .userInitiated) {
+                (try? repository.searchStops(q)) ?? []
+            }.value
+        }
         .onDisappear {
             addresses?.cancel()
             location.stop()
         }
         .sheet(isPresented: $showingMapPicker) {
             MapPointPickerView { coordinate in
-                pick(.droppedPin(Coordinate(latitude: coordinate.latitude,
-                                            longitude: coordinate.longitude)))
+                let point = Coordinate(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                resolvingDroppedPin = true
+                Task {
+                    let resolved = await resolver.resolve(coordinate: point)
+                    resolvingDroppedPin = false
+                    pick(.droppedPin(point, name: resolved.name, subtitle: resolved.subtitle))
+                }
             }
         }
         .sheet(isPresented: Binding(
@@ -115,6 +142,13 @@ struct MapSearchSheet: View {
         )) {
             if let savingPlaceFrom {
                 SavedPlaceEditorView(mode: .createFrom(savingPlaceFrom))
+            }
+        }
+        .overlay {
+            if resolvingDroppedPin {
+                ProgressView()
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
             }
         }
     }
@@ -192,7 +226,16 @@ struct MapSearchSheet: View {
 
     @ViewBuilder
     private var shortcuts: some View {
-        if showsSavedJourneys, !environment.savedPlaces.journeys.isEmpty {
+        let layout = SearchLayoutBuilder.shortcuts(
+            showsSavedJourneys: showsSavedJourneys,
+            hasData: environment.hasData,
+            savedJourneys: environment.savedPlaces.journeys.count,
+            savedPlaces: environment.savedPlaces.places.count,
+            favourites: environment.favourites.stops.count,
+            nearby: nearby.count,
+            lines: lines.count)
+
+        if layout.sections.contains(.savedJourneys) {
             Section("Trayectos guardados") {
                 ForEach(environment.savedPlaces.journeys) { journey in
                     Button {
@@ -213,12 +256,11 @@ struct MapSearchSheet: View {
             }
         }
 
-        if !environment.savedPlaces.places.isEmpty {
+        if layout.sections.contains(.savedPlaces) {
             Section("Lugares guardados") {
                 ForEach(environment.savedPlaces.places) { place in
                     Button {
-                        pick(MapPlace(place: place.place, subtitle: place.anchor.resolvedStop?.name,
-                                      origin: .savedPlace(place.id)))
+                        pick(.savedPlace(place))
                     } label: {
                         Label(place.name, systemImage: place.symbolName)
                     }
@@ -226,88 +268,133 @@ struct MapSearchSheet: View {
             }
         }
 
-        if !environment.favourites.stops.isEmpty {
+        if layout.sections.contains(.favourites) {
             Section("Paradas favoritas") {
                 ForEach(environment.favourites.stops) { stop in stopRow(stop) }
             }
         }
 
-        if !nearby.isEmpty {
+        if layout.sections.contains(.nearby) {
             Section("Cerca de ti") {
                 ForEach(nearby) { nearbyRow($0) }
             }
-        }
-
-        if !lines.isEmpty {
-            Section("Líneas con servicio") {
-                ForEach(lines) { lineRow($0) }
+        } else if environment.hasData, location.isDenied {
+            // H-29: an empty section that says nothing looks identical to "nobody is
+            // nearby" — the two have very different fixes.
+            Section("Cerca de ti") {
+                Text("El permiso de ubicación está desactivado, así que no se pueden mostrar las paradas cercanas. Actívalo en Ajustes.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
 
-        if (!showsSavedJourneys || environment.savedPlaces.journeys.isEmpty),
-           environment.savedPlaces.places.isEmpty,
-           environment.favourites.stops.isEmpty {
-            Text("Busca una parada por nombre o número, o una dirección de Vigo.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        if layout.sections.contains(.lines) {
+            linesSection
+        }
+
+        switch layout.emptyState {
+        case .noFeed: noFeedMessage
+        case .gettingStarted: gettingStartedMessage
+        case .none, .queryTooShortForAddresses, .noResults: EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var linesSection: some View {
+        Section("Líneas con servicio") {
+            ForEach(showingAllLines ? lines : Array(lines.prefix(8))) { lineRow($0) }
+            if !showingAllLines, lines.count > 8 {
+                Button("Ver todas (\(lines.count))") { showingAllLines = true }
+            }
+        }
+    }
+
+    private var gettingStartedMessage: some View {
+        Text("Busca una parada por nombre o número, o una dirección de Vigo.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+
+    private var noFeedMessage: some View {
+        ContentUnavailableView {
+            Label("Sin datos del feed", systemImage: "tray")
+        } description: {
+            Text("Todavía no se ha importado ningún horario de Vitrasa. Actualiza desde Ajustes.")
         }
     }
 
     // MARK: - Resultados
 
-    /// Lines matching the query by short or long name — "15" now finds línea 15, not just
-    /// paradas whose stop code happens to contain it.
-    private var matchingLines: [Route] {
-        let folded = TextNormalization.searchFolded(query)
-        guard !folded.isEmpty else { return [] }
-        return lines.filter {
-            TextNormalization.searchFolded($0.shortName).contains(folded)
-                || TextNormalization.searchFolded($0.longName).contains(folded)
-        }
-    }
-
     @ViewBuilder
     private var searchResults: some View {
-        if !results.isEmpty {
+        // Computed once per pass and reused below — this used to be a computed property
+        // read twice, folding all 45 real lines' names a second time for nothing (H-26).
+        let matchingLines = LineMatching.matches(query: query, in: lines)
+        let addressesQueryTooShort = query.trimmingCharacters(in: .whitespacesAndNewlines).count
+            < AddressSearchModel.minimumQueryLength
+        let layout = SearchLayoutBuilder.results(
+            hasData: environment.hasData,
+            stops: results.count,
+            matchingLines: matchingLines.count,
+            addressesQueryTooShort: addressesQueryTooShort,
+            addressesSearching: addresses?.isSearching ?? false,
+            addresses: addresses?.suggestions.count ?? 0,
+            addressesFailed: addresses?.failed ?? false)
+
+        if layout.sections.contains(.stops) {
             Section("Paradas") {
                 ForEach(results) { stop in stopRow(stop) }
             }
         }
 
-        if !matchingLines.isEmpty {
+        if layout.sections.contains(.matchingLines) {
             Section("Líneas") {
                 ForEach(matchingLines) { lineRow($0) }
             }
         }
 
-        Section {
-            if addresses?.isSearching == true, addresses?.suggestions.isEmpty ?? true {
-                HStack {
-                    ProgressView()
-                    Text("Buscando direcciones…")
+        if layout.sections.contains(.addresses) {
+            Section {
+                if addresses?.isSearching == true, addresses?.suggestions.isEmpty ?? true {
+                    HStack {
+                        ProgressView()
+                        Text("Buscando direcciones…")
+                    }
                 }
+                if let addresses {
+                    ForEach(addresses.suggestions) { suggestion in
+                        addressRow(suggestion, addresses: addresses)
+                    }
+                    if addresses.failed {
+                        Text(addresses.failure == .outsideCoverage
+                             ? "Esa dirección queda fuera de la zona que cubre el feed."
+                             : "No he podido buscar direcciones ahora mismo.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Direcciones")
+            } footer: {
+                Text("Las direcciones las busca Apple Mapas. Tu ubicación no se envía: la búsqueda siempre se centra en Vigo.")
             }
-            if let addresses {
-                ForEach(addresses.suggestions) { suggestion in
-                    addressRow(suggestion, addresses: addresses)
-                }
-                if addresses.failed {
-                    Text(addresses.failure == .outsideCoverage
-                         ? "Esa dirección queda fuera de la zona que cubre el feed."
-                         : "No he podido buscar direcciones ahora mismo.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } header: {
-            Text("Direcciones")
-        } footer: {
-            Text("Las direcciones las busca Apple Mapas. Tu ubicación no se envía: la búsqueda siempre se centra en Vigo.")
         }
 
-        if results.isEmpty, matchingLines.isEmpty,
-           addresses?.suggestions.isEmpty ?? true, addresses?.isSearching != true {
+        switch layout.emptyState {
+        case .noFeed:
+            noFeedMessage
+        case .noResults:
             ContentUnavailableView.search(text: query)
+        case .queryTooShortForAddresses:
+            // H-22: distinct from `.noResults` on purpose — the address geocoder never ran,
+            // so claiming a completed search found nothing would be false.
+            ContentUnavailableView {
+                Label("Sin resultados por ahora", systemImage: "magnifyingglass")
+            } description: {
+                Text("No hay paradas ni líneas para «\(query)». Sigue escribiendo para buscar también en direcciones.")
+            }
+        case .none, .gettingStarted:
+            EmptyView()
         }
     }
 
@@ -315,13 +402,19 @@ struct MapSearchSheet: View {
         Button {
             pick(.stop(stop))
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(stop.name).font(.subheadline).lineLimit(2)
-                if let code = stop.vitrasaCode {
-                    Text("Parada \(code.value)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(stop.name).font(.subheadline).lineLimit(2)
+                    if let code = stop.vitrasaCode {
+                        Text("Parada \(code.value)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                // H-27: without this, `.buttonStyle(.plain)` sizes the tap target to the
+                // text's own width, not the row's — the right two-thirds of a short stop
+                // name went dead to touch.
+                Spacer(minLength: 0)
             }
         }
         .buttonStyle(.plain)

@@ -11,8 +11,9 @@ import VigoCore
 @Observable
 final class AddressSearchModel {
     /// Matches the floor in `MapKitAddressSearchService`, enforced here too so a short query
-    /// never even starts a debounce timer.
-    private static let minimumQueryLength = 3
+    /// never even starts a debounce timer. Not `private`: `MapSearchSheet` reads it to tell
+    /// "too short to have searched" apart from "searched and found nothing" (H-22).
+    static let minimumQueryLength = 3
 
     private(set) var suggestions: [AddressSuggestion] = []
     private(set) var isSearching = false

@@ -21,7 +21,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
-| **Auditoría del buscador** | 🟡 Tanda A hecha (correcciones de emparejamiento). B–D en `AUDITORIA-BUSCADOR.md` |
+| **Auditoría del buscador** | 🟡 Tandas A y B hechas. C–D en `AUDITORIA-BUSCADOR.md` |
 
 ---
 
@@ -1620,3 +1620,91 @@ resolvieron aquí porque tocan exactamente el código que esta tanda ya estaba r
 Pendiente: Tandas B (UI honesta y la ruta accesible de "Elegir en el mapa"), C (direcciones —
 `MapKitAddressSearchService`) y D (deuda del buscador y desbloqueo de la Fase 12), en
 `AUDITORIA-BUSCADOR.md` §6.
+
+## Auditoría del buscador — Tanda B: UI honesta y la ruta accesible de "Elegir en el mapa"
+
+Corrige H-33, H-44/H-21/H-22/H-23/H-28, H-45/H-25/H-26/H-39, H-24, H-27, H-29 de
+`AUDITORIA-BUSCADOR.md`, más H-08 (no listado en ninguna tanda del informe original — un
+descuido del propio plan; se hace aquí porque toca exactamente el `.onChange`/`.task` que
+esta tanda ya estaba reescribiendo) y, de paso, H-35 (la fila de lugar guardado ya usaba
+`MapPlace.savedPlace(_:)` en vez de reconstruirlo a mano, porque esa línea cayó dentro del
+mismo bloque que había que tocar para `SearchLayoutBuilder`).
+
+**H-33 — "Elegir en el mapa" ahora geocodifica.** Era la ruta *accesible* a soltar un pin —
+la Fase 7 la añadió a propósito para VoiceOver— y daba peor resultado que la pulsación larga
+inaccesible: siempre "Punto en el mapa", nunca la calle. `MapSearchSheet` recibe un
+`resolver: any MapPlaceResolving = MapKitPlaceResolver()` inyectable (mismo patrón que ya usa
+`MapScreenModel`) y lo usa en el cierre de `MapPointPickerView`: geocodifica el punto elegido
+antes de llamar a `pick(_:)`, para los tres `Purpose` por igual — no hacía falta distinguir
+`.explore` de `.endpoint`/`.standalone`, porque para cuando el pin llega a `onPick` el picker
+ya se ha cerrado, así que no hay "tarjeta bajo el dedo" que proteger como sí la hay en la
+pulsación larga sobre el mapa. Un `@State private var resolvingDroppedPin` con un overlay de
+`ProgressView` cubre la espera del geocoder, para no cambiar un bug por un silencio.
+
+**H-44 — `SearchLayoutBuilder`, nuevo en `VigoCore`.** La decisión de qué secciones se
+dibujan, en qué orden, y qué se dice cuando una lista está vacía, salía del simulador: dos
+funciones puras (`shortcuts`, `results`), una por cada `@ViewBuilder` que ya tenía la hoja,
+con un tipo `SearchLayout` (secciones + `SearchEmptyState`) como resultado. `MapSearchSheet`
+solo llama y hace `switch`. De paso:
+- **H-28** — sin `hasData`, las dos funciones devuelven `.noFeed` antes de mirar nada más: la
+  hoja ya no dice "No hay resultados para X" cuando lo que falta es el feed entero.
+- **H-23** — el texto de ayuda del estado vacío ahora depende de que **todas** las secciones
+  estén vacías (`sections.isEmpty`), no de una lista a mano que se olvidaba de "Cerca de ti"
+  y "Líneas con servicio".
+- **H-22** — `.queryTooShortForAddresses` es un caso distinto de `.noResults`: por debajo del
+  mínimo del geocoder la sección "Direcciones" nunca se dibuja (no hay nada que enseñar ni
+  que fallar), y el texto ya no afirma una búsqueda que no llegó a ocurrir.
+- **H-21** — la sección "Direcciones" solo aparece buscando, con resultados, o tras un fallo
+  — nunca vacía y sin motivo. Un fallo, además, deja de contar para `.noResults`: la fila ya
+  explica qué pasó, y apilar un segundo aviso encima sería decirlo dos veces.
+
+**H-45 — `LineMatching`, nuevo en `VigoCore`.** La lógica de `matchingLines` —una `View`
+privada, sin test posible— pasa al paquete, con firma
+`LineMatching.matches(query:in:limit:) -> [Route]`. Escalonada como `searchStops`, pero en la
+dirección contraria: una parada se busca por prefijo *del nombre*; una línea se busca por
+coincidencia con su *código corto*, porque quien teclea "15" quiere la línea 15, no una
+palabra que la contenga.
+- **H-25** — código exacto, luego prefijo del código, luego contenido en el nombre largo. Ya
+  no hay un nivel "el código contiene la consulta" sin escalonar: era ese nivel el que hacía
+  que "a" sola devolviera 44 de 45 líneas reales.
+- **H-39** — las dos primeras etapas usan `normalizedLineName`, no `searchFolded`: pliega el
+  punto final que el feed pone en las variantes fantasma (`9B.`), que `searchFolded` habría
+  dejado intacto.
+- **H-26** — en la vista, `matchingLines` pasa de propiedad computada (leída dos veces por
+  cada `body`) a `let` local dentro de `searchResults`, calculada una sola vez.
+
+**H-24 — "Líneas con servicio" ya no lista las 45 sin más.** De las dos salidas que ofrecía
+el informe se eligió la más barata: la sección arranca colapsada a 8 filas con un botón "Ver
+todas (45)" que las despliega, en vez de tocar `MapStopsLayer`/`MapScreenModel` para filtrar
+la capa de paradas por línea — eso habría sido una funcionalidad nueva, no un arreglo.
+
+**H-27 — `stopRow` ahora tiene todo el ancho tocable.** `.buttonStyle(.plain)` hace que el
+área de toque sea la del contenido de la etiqueta, y esa etiqueta era un `VStack` sin
+`Spacer`: la mitad derecha de una fila con nombre corto no respondía al toque. Ahora es un
+`HStack` con `Spacer(minLength: 0)` al final, igual que ya hacían `addressRow` y `nearbyRow`.
+
+**H-29 — permiso de ubicación denegado, explicado.** Con "Cerca de ti" vacía porque
+`location.isDenied`, la sección deja de desaparecer sin más: aparece con una fila que dice
+por qué y qué hacer.
+
+**Verificación.** Suite de `VigoCore`: **354 tests en verde** (+19: 7 en
+`LineMatchingTests.swift`, 12 en `SearchLayoutTests.swift`, ambos nuevos). Target de app: 16
+tests en verde, sin cambios propios — nada de esta tanda vive todavía en un tipo que sus
+tests toquen. `xcodebuild` Debug y Release contra `generic/platform=iOS` compilan.
+
+**Verificado por mutación, cuatro veces:** colapsar `.queryTooShortForAddresses` en
+`.noResults` (H-22), volver a "el código corto contiene la consulta" sin escalonar (H-25/H-45,
+tumba dos tests). Sobre las mismas ocho de la Tanda A, sin cambios — esta tanda no tocó
+`TransitRepository` ni `TextNormalization`.
+
+**No verificado interactivamente.** Se intentó recorrer el flujo en el simulador (arrancar,
+tocar la barra de búsqueda, comprobar el aviso de "sin datos", "Elegir en el mapa") y no se
+consiguió: los toques cerca del borde inferior de la pantalla —la propia barra de búsqueda y
+la barra de pestañas— no llegaban a los controles en esta sesión, aunque los del borde
+superior y los del mapa sí. No se ha llegado a determinar si es una limitación de la
+herramienta de control del simulador en este entorno o algo más. Sigue pendiente, como
+siempre desde la Fase 5, la comprobación en dispositivo del propietario — aquí con un motivo
+más además del de costumbre.
+
+Pendiente: Tandas C (`MapKitAddressSearchService`) y D (deuda del buscador y desbloqueo de la
+Fase 12), en `AUDITORIA-BUSCADOR.md` §6.
