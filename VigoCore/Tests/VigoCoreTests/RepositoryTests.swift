@@ -149,6 +149,37 @@ struct RepositoryTests {
         #expect(hits.first?.id == StopID("3493"))
     }
 
+    /// H-03: the prefix branch used to match against the raw digits, so a leading zero
+    /// ("0693") produced a pattern no stored code could ever start with. "693" already
+    /// finds the stop by prefix (code 6930), so it is the reference the leading-zero form
+    /// has to agree with.
+    @Test("A leading zero in a numeric query does not change the result")
+    func numericSearchIgnoresLeadingZero() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        #expect(try repository.searchStops("0693").map(\.id) == repository.searchStops("693").map(\.id))
+        #expect(!(try repository.searchStops("693")).isEmpty)
+    }
+
+    /// H-09: matching used to be a single substring test over the whole query, so terms in
+    /// a different order than the name — or separated by a stop word the user did not type —
+    /// found nothing.
+    @Test("Search terms do not need to be contiguous or in name order")
+    func searchMatchesTermsInAnyOrder() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        let reordered = try repository.searchStops("america praza")
+        #expect(reordered.count == 2, "same two hits as \"praza de america\", just reordered")
+        #expect(Set(reordered.map(\.id)) == Set(try repository.searchStops("praza de america").map(\.id)))
+    }
+
+    /// H-01/H-42: a general contract of `limit`, exercised on the tier that already ran
+    /// through the SQL-level `.limit()` before this change — this is about the merge with
+    /// the numeric branch never re-exceeding it, not about escaping specifically.
+    @Test("The result never exceeds limit")
+    func searchRespectsLimit() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        #expect(try repository.searchStops("america", limit: 1).count == 1)
+    }
+
     @Test("Finds nearby stops ordered by distance")
     func nearby() throws {
         let repository = TransitRepository(database: try Fixture.importedDatabase())
@@ -165,6 +196,32 @@ struct RepositoryTests {
         let nearby = try repository.nearbyStops(
             latitude: 42.2209973130163, longitude: -8.73283517659561, radiusMetres: 50)
         #expect(!nearby.contains { $0.stop.id == StopID("3885") }, "Urzáiz is ~1.4 km away")
+    }
+
+    /// H-43: the bounding box is square and the radius is a circle, so a stop can sit
+    /// inside the box and still be farther than `radiusMetres` away — near a corner. The
+    /// existing `nearbyRadius` test above cannot catch a broken circle filter because at
+    /// 50 m the box alone already excludes the far stop; this one places the origin so the
+    /// box would include stop 3493 but the true distance does not.
+    @Test("The exact-distance filter excludes a stop the bounding box alone would keep")
+    func nearbyRadiusFiltersCornerOfTheBox() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        // 594 m north and 594 m west of stop 3493 — inside a 600 m box on both axes, but
+        // the true straight-line distance to the stop is ~839 m.
+        let origin = (latitude: 42.21566134463685, longitude: -8.740040507770685)
+        let distance = TransitRepository.haversineMetres(
+            origin.latitude, origin.longitude, 42.2209973130163, -8.73283517659561)
+        #expect(distance > 600, "the crafted origin must sit outside the 600 m circle")
+
+        let nearby = try repository.nearbyStops(
+            latitude: origin.latitude, longitude: origin.longitude, radiusMetres: 600)
+        #expect(!nearby.contains { $0.stop.id == StopID("3493") })
+
+        // The same origin with a radius that covers the true distance finds it — proof the
+        // exclusion above is the radius, not some other reason the stop cannot be found.
+        let wider = try repository.nearbyStops(
+            latitude: origin.latitude, longitude: origin.longitude, radiusMetres: 900)
+        #expect(wider.contains { $0.stop.id == StopID("3493") })
     }
 
     /// Ghost routes must never reach the UI.

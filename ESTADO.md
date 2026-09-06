@@ -21,6 +21,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
+| **Auditoría del buscador** | 🟡 Tanda A hecha (correcciones de emparejamiento). B–D en `AUDITORIA-BUSCADOR.md` |
 
 ---
 
@@ -1539,3 +1540,83 @@ cubren indirectamente por los de `TransitRepository`). Debug y Release compilan 
 - [ ] Pasados los 90 minutos de gracia tras la llegada prevista, la cápsula cambia a
       «¿Sigues en este trayecto?» y «Sigo en él» la vuelve a `.active`
 - [ ] Reimportar el feed (o esperar al refresco semanal) no hace desaparecer la cápsula
+
+## Auditoría del buscador — Tanda A: calidad del emparejamiento
+
+`AUDITORIA-BUSCADOR.md` (2026-09-06) auditó el motor de búsquedas entero y encontró que el
+emparejamiento de paradas fallaba en casos razonables — verificado contra el feed real, no
+solo razonado. Esta tanda es la primera de las cuatro que el informe propone: los hallazgos
+H-01 a H-06, H-09 y H-10, todos en `VigoCore` y sin tocar la app.
+
+**H-10 — la puntuación no se plegaba.** `TextNormalization.searchFolded` quitaba acentos y
+mayúsculas pero dejaba puntos, guiones y comillas, así que "avda florida" no encontraba
+"Avda. da Florida". Ahora todo carácter que no sea letra o dígito se pliega a espacio antes
+de colapsar los espacios. Los dígitos se conservan a propósito: un número de portal es parte
+de lo que se busca.
+
+**Efecto secundario que hay que saber: cambia `searchName`.** Esa columna se calcula en el
+import (`GTFSParser.swift`, al construir cada `Stop`), así que la base ya en disco de un
+dispositivo real sigue teniendo los valores plegados a la manera antigua hasta el próximo
+refresco del feed — semanal, o manual desde Ajustes. No hace falta una migración `v4`: el
+importador borra y reescribe la tabla `stop` entera en cada refresco (la invariante de
+siempre), así que el primer refresco después de esta build autocorrige el valor sin que haga
+falta ningún paso especial. Mientras tanto, la búsqueda sigue funcionando con las reglas
+viejas para los nombres con puntuación — no rompe nada, solo tarda un refresco en mejorar.
+
+**H-01 — comodines de `LIKE` sin escapar.** `TextNormalization.likePattern(_:)`, nueva,
+escapa `\`, `%` y `_` para usar con `LIKE ... ESCAPE '\'`. En la práctica H-10 ya deja fuera
+`%` y `_` antes de que lleguen aquí (se pliegan a espacio como cualquier otra puntuación), así
+que el escapado es sobre todo defensa en profundidad para quien construya un patrón a partir
+de texto que no haya pasado por `searchFolded` — y es la función que en teoría usará el
+`dedupKey` de la Fase 12.
+
+**H-09 — la consulta ya no es una única subcadena.** `searchStops` divide la consulta en
+términos y exige que todos aparezcan en alguna parte del nombre, en cualquier orden:
+"praza america" y "america praza" encuentran lo mismo que "praza de america". Dentro del
+nivel "aparece en alguna parte", los resultados se puntúan por cuántos términos son prefijo
+de alguna palabra del nombre (`termPrefixScore`), así que "coru" pone "Coruña ..." por delante
+de un nombre que solo la contiene a media palabra. Sin FTS5 ni trigramas: sobre 1154 filas la
+consulta sigue costando <1 ms (medido).
+
+**H-02/H-03/H-04/H-06 — la rama numérica.** Reescrita entera:
+- Ya no corta la búsqueda por nombre — un código exacto o por prefijo se **fusiona** con los
+  resultados por nombre en vez de sustituirlos (antes, si algún código coincidía, ninguna
+  parada con ese dígito en el nombre podía aparecer).
+- El prefijo se construye desde la forma canónica (`digits` sin ceros a la izquierda), así
+  que "0693" encuentra la misma parada que "693".
+- El recorte a `limit` ocurre una sola vez, al final, sobre el conjunto ya fusionado —
+  `exact + prefix` ya no podía superar el límite por su cuenta.
+- La consulta de prefijo no depende de `Int(digits)`: una consulta de veinte dígitos ya no
+  se salta la rama entera, solo no encuentra nada (correcto).
+
+**H-05 — espacios interiores, documentado.** "69 30" sigue leyéndose como "6930" a propósito
+(números leídos en voz alta o tecleados con espacios), y ahora el comentario lo dice.
+
+**Verificación.** Suite de `VigoCore`: **335 tests en verde** (+14: 4 en
+`TextNormalizationTests.swift`, nuevo; 5 en `RepositoryTests.swift`, sobre el fixture
+compartido; 5 en `SearchQualityTests.swift`, nuevo, con un fixture propio y pequeño —
+deliberadamente no se tocó el fixture compartido, que `GTFSParserTests`/`RepositoryTests` ya
+cuentan en 4 paradas exactas). Más una batería nueva en `RealFeedIntegrationTests.swift`
+(`searchQualityBattery`, tras `VIGO_GTFS_ZIP`), con los umbrales por forma que ese fichero ya
+exige — nunca una cuenta exacta, porque el feed se regenera cada semana.
+
+**Verificado por mutación, ocho veces**, cada una tumbando exactamente el test que le
+corresponde: quitar el escapado de `likePattern` (H-01), quitar el plegado de puntuación
+(H-10, tumba 3 tests — incluido el de `GTFSParserTests` que ya existía), volver a un único
+`LIKE` sin dividir en términos (H-09, tumba dos tests, uno por fixture), usar `digits` sin
+canonizar (H-03), quitar el recorte final a `limit` (H-02, tumba dos tests, uno por fixture),
+volver al `return` temprano de la rama numérica (H-04), fusionar los dos niveles de
+relevancia en un único orden alfabético (H-40 — y la primera versión de este test no lo
+habría detectado: los dos nombres elegidos también quedaban en el orden correcto
+alfabéticamente por casualidad; se corrigió con nombres adversos al alfabeto antes de
+confiar en él), y quitar el filtro exacto de radio de `nearbyStops` (H-43, ya señalado por la
+propia auditoría como sin cubrir).
+
+**Deliberadamente en esta tanda y no en otra:** H-40, H-42 y H-43 son hallazgos de
+testabilidad del informe (tests que faltaban, no comportamiento que faltara arreglar) que se
+resolvieron aquí porque tocan exactamente el código que esta tanda ya estaba reescribiendo
+— separarlos en su propia tanda habría sido reabrir el mismo fichero dos veces.
+
+Pendiente: Tandas B (UI honesta y la ruta accesible de "Elegir en el mapa"), C (direcciones —
+`MapKitAddressSearchService`) y D (deuda del buscador y desbloqueo de la Fase 12), en
+`AUDITORIA-BUSCADOR.md` §6.

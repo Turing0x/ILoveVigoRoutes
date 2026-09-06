@@ -102,6 +102,50 @@ struct RealFeedIntegrationTests {
         #expect(nearby.allSatisfy { $0.distanceMetres <= 500 })
     }
 
+    /// The battery behind the search-engine audit (`AUDITORIA-BUSCADOR.md`, H-01, H-02,
+    /// H-09, H-10): real names and codes that a straight substring match, or an unescaped
+    /// `LIKE`, gets wrong. Shape-based, like the rest of this suite — never an exact stop
+    /// identity or count, since the feed regenerates weekly — but every threshold below was
+    /// checked by hand against a real download before being written here.
+    @Test("Real-world queries that a naive substring match would get wrong")
+    func searchQualityBattery() throws {
+        let result = try parsed()
+        let db = try AppDatabase.inMemory()
+        _ = try GTFSImporter(database: db).import(feed: result.feed, parseWarnings: result.warnings)
+        let repository = TransitRepository(database: db)
+
+        // H-09 — terms in a different order than the name, or separated by a Galician
+        // stop word ("de") nobody types, still have to find something.
+        for query in ["america praza", "praza america"] {
+            #expect(!(try repository.searchStops(query).isEmpty), "query: \(query)")
+        }
+
+        // H-10 — an abbreviation's dot, a hyphen, or quotes must not be required verbatim.
+        for query in ["avda florida", "av florida", "urzaiz principe", "hospital povisa"] {
+            #expect(!(try repository.searchStops(query).isEmpty), "query: \(query)")
+        }
+
+        // H-01 — a literal SQL wildcard in the query must not act like one. `%`/`_` alone
+        // fold away to nothing (see `TextNormalizationTests`) and must find nothing; `%a%`
+        // folds down to the single letter "a" — a real, if unhelpful, one-letter query —
+        // and must behave exactly like searching "a" plain, not like a wildcard that widens
+        // the match beyond what "a" alone would find.
+        for query in ["%", "_"] {
+            #expect(try repository.searchStops(query).isEmpty, "query: \(query)")
+        }
+        #expect(try repository.searchStops("%a%").map(\.id) == repository.searchStops("a").map(\.id))
+
+        // H-02 — a numeric query with far more than `limit` matching codes (real feed: 139
+        // stops whose code starts with "20") must never return more than asked.
+        #expect(try repository.searchStops("20").count <= 50)
+        #expect(try repository.searchStops("20", limit: 10).count <= 10)
+
+        // H-03 — a leading zero must not change which stop a numeric query finds; "693"
+        // matches stop 6930 by prefix, and the zero-padded form has to agree.
+        #expect(try repository.searchStops("0693").map(\.id) == repository.searchStops("693").map(\.id))
+        #expect(!(try repository.searchStops("693")).isEmpty)
+    }
+
     /// The acceptance criterion itself (`ILoveVigoRoutes-HANDOFF.md:192-194`): a known
     /// trip across the city returns a plausible route. Shape-based like the rest of this
     /// suite — the exact alternative depends on this week's timetable — but every outcome

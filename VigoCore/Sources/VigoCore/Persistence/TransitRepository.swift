@@ -187,34 +187,85 @@ public struct TransitRepository: Sendable {
 
     /// Name or stop-number search.
     ///
-    /// Matching is done on the accent-folded name computed at import time, so the user can
-    /// type "america" and find "Praza de América". A purely numeric query is also matched
-    /// against the public stop code, which is how the numbers printed at the stop read.
+    /// Matching is done on the accent- and punctuation-folded name computed at import time
+    /// (`TextNormalization.searchFolded`), so the user can type "america" and find "Praza de
+    /// América", and "avda florida" and find "Avda. da Florida". The query is split into
+    /// terms and every term must appear somewhere in the name — order and adjacency do not
+    /// matter, so "praza america" and "america praza" both find "Praza de América" — with
+    /// results ranked so a match at the very start of the name, then a match at the start of
+    /// some word in it, outranks one only buried mid-word.
+    ///
+    /// A numeric query is also matched against the public stop code (how the number printed
+    /// at the stop reads), merged with the name results rather than replacing them: a short
+    /// number is as often a portal number as a stop code.
     public func searchStops(_ query: String, limit: Int = 50) throws -> [Stop] {
         let folded = TextNormalization.searchFolded(query)
         guard !folded.isEmpty else { return [] }
         let digits = folded.filter(\.isNumber)
+        // Inner spaces are accepted on purpose ("69 30" reads the same as "6930") — `digits`
+        // already strips them before either query below sees them.
         let isNumeric = !digits.isEmpty && folded.allSatisfy { $0.isNumber || $0.isWhitespace }
+        let pattern = TextNormalization.likePattern(folded)
+        let terms = folded.split(separator: " ").map(String.init)
+        let termClause = terms.map { _ in "searchName LIKE ? ESCAPE '\\'" }.joined(separator: " AND ")
+        let termArgs: [String] = terms.map { "%\(TextNormalization.likePattern($0))%" }
 
         return try database.writer.read { db in
-            if isNumeric, let code = Int(digits) {
-                let exact = try Stop.filter(sql: "vitrasaCode = ?", arguments: [code]).fetchAll(db)
-                let prefix = try Stop.filter(
-                    sql: "CAST(vitrasaCode AS TEXT) LIKE ? AND vitrasaCode <> ?",
-                    arguments: ["\(digits)%", code]
-                ).limit(limit).fetchAll(db)
-                if !exact.isEmpty || !prefix.isEmpty { return exact + prefix }
+            var numeric: [Stop] = []
+            if isNumeric {
+                let exactCode = Int(digits)
+                if let exactCode {
+                    numeric += try Stop.filter(sql: "vitrasaCode = ?", arguments: [exactCode]).fetchAll(db)
+                }
+                // The canonical form, not `digits`: no stored code carries a leading zero, so
+                // "0693" has to find the same stop as "693". Built without `Int(digits)`, which
+                // is `nil` for an implausibly long query — the prefix search below does not
+                // need the integer, only the exact match above does.
+                let canonical = String(digits.drop(while: { $0 == "0" }))
+                if !canonical.isEmpty {
+                    var sql = "CAST(vitrasaCode AS TEXT) LIKE ? ESCAPE '\\'"
+                    var args: [any DatabaseValueConvertible] = ["\(TextNormalization.likePattern(canonical))%"]
+                    if let exactCode {
+                        sql += " AND vitrasaCode <> ?"
+                        args.append(exactCode)
+                    }
+                    numeric += try Stop.filter(sql: sql, arguments: StatementArguments(args))
+                        .order(sql: "vitrasaCode").limit(limit).fetchAll(db)
+                }
             }
+
             // Prefix matches first, then matches anywhere, so "coru" puts
             // "Rúa da Coruña" above a stop that merely mentions it.
             let prefixed = try Stop
-                .filter(sql: "searchName LIKE ?", arguments: ["\(folded)%"])
+                .filter(sql: "searchName LIKE ? ESCAPE '\\'", arguments: ["\(pattern)%"])
                 .order(sql: "searchName").limit(limit).fetchAll(db)
+            // Every term has to appear somewhere, in any order — "hospital povisa" finds
+            // "Rúa de Barcelona  Hospital Ribera Povisa" even though the words are neither
+            // contiguous nor in that order in the name.
             let contained = try Stop
-                .filter(sql: "searchName LIKE ? AND searchName NOT LIKE ?",
-                        arguments: ["%\(folded)%", "\(folded)%"])
-                .order(sql: "searchName").limit(limit).fetchAll(db)
-            return Array((prefixed + contained).prefix(limit))
+                .filter(sql: "(\(termClause)) AND searchName NOT LIKE ? ESCAPE '\\'",
+                        arguments: StatementArguments(termArgs + ["\(pattern)%"]))
+                .fetchAll(db)
+                .map { ($0, Self.termPrefixScore(terms, in: $0.searchName)) }
+                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.searchName < $1.0.searchName }
+                .map(\.0)
+
+            var seen = Set<StopID>()
+            var merged: [Stop] = []
+            for stop in numeric + prefixed + contained where seen.insert(stop.id).inserted {
+                merged.append(stop)
+            }
+            return Array(merged.prefix(limit))
+        }
+    }
+
+    /// How many `terms` prefix some word of `foldedName`, for ranking the "appears
+    /// somewhere" tier of `searchStops`: a term matching the start of a word ("coru" in
+    /// "rua da coruna") outranks one that only appears buried inside one.
+    private static func termPrefixScore(_ terms: [String], in foldedName: String) -> Int {
+        let words = foldedName.split(separator: " ")
+        return terms.reduce(0) { score, term in
+            score + (words.contains { $0.hasPrefix(term) } ? 1 : 0)
         }
     }
 
