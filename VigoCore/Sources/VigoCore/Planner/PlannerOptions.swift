@@ -103,6 +103,18 @@ public struct PlannerOptions: Sendable, Hashable {
     /// they do want.
     public var extraTransferWorthSeconds: Int
 
+    /// How many stops `nearbyStops` may return for the access and egress searches (H-11).
+    ///
+    /// `TransitRepository.nearbyStops` defaults to 40, a figure sized for a search sheet's
+    /// results list, not for the planner — and against the real feed an 800 m radius in
+    /// central Vigo already returns exactly 40, meaning that default silently caps both
+    /// searches today. A stop just past the cutoff by distance can still be the one Fase 10's
+    /// egress front wants: it trades a little more time for a shorter final walk, which is
+    /// a real trade only if the stop is in the candidate set to begin with. `accessRadiusMetres`
+    /// is the figure meant to bound this; this is headroom above what that radius has ever
+    /// produced in practice, not a second radius of its own.
+    public var maxNearbyStops: Int
+
     public init(
         walkSpeedMetresPerSecond: Double = 1.33,
         walkDetourFactor: Double = 1.35,
@@ -116,7 +128,8 @@ public struct PlannerOptions: Sendable, Hashable {
         maxDepartureScans: Int = 4,
         maxCandidates: Int = 8,
         maxEgressCandidates: Int = 3,
-        extraTransferWorthSeconds: Int = 300
+        extraTransferWorthSeconds: Int = 300,
+        maxNearbyStops: Int = 100
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
         self.walkDetourFactor = walkDetourFactor
@@ -131,5 +144,6 @@ public struct PlannerOptions: Sendable, Hashable {
         self.maxCandidates = maxCandidates
         self.maxEgressCandidates = maxEgressCandidates
         self.extraTransferWorthSeconds = extraTransferWorthSeconds
+        self.maxNearbyStops = maxNearbyStops
     }
 }

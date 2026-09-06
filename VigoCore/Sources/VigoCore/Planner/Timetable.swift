@@ -32,6 +32,16 @@ public struct TripRef: Sendable, Hashable {
 /// integers are the only thing that makes that loop cheap; a `[[StopTime]]` would spend
 /// its life chasing pointers. The layout is CSR — an offsets array saying where each
 /// pattern's data begins, and one flat data array behind it.
+///
+/// **Why `Int32` is safe here (H-16).** Every time on this axis is seconds relative to
+/// `anchorMidnight`, folded from at most three service days (`TimetableBuilder`'s
+/// yesterday/today/tomorrow) plus a GTFS time that may run past `30:00:00`. That bounds the
+/// whole axis to roughly `[-1 day, +2 days]` in seconds — nowhere near `Int32`'s range —
+/// which is what makes every `&+`/`&-` on these values in `RaptorEngine` and
+/// `JourneyReconstruction` an optimisation rather than a risk: the wraparound they exist to
+/// avoid the cost of checking for is not reachable from real data. Nothing enforces this
+/// bound in code; `JourneyPlanner.scan` asserts it at the one place an external time (the
+/// caller's requested departure) enters the axis.
 public struct Timetable: Sendable {
 
     // MARK: - Stops

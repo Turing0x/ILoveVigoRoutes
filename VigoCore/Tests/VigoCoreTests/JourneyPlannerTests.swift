@@ -90,6 +90,58 @@ private enum PlannerFacadeFixture {
     }
 }
 
+/// Three stops near one destination: two close by with no route at all, and one further
+/// away that a real bus actually reaches. `nearbyStops` returns them nearest-first, so a
+/// small enough limit drops exactly the reachable one — H-11's bug, reproduced with three
+/// stops instead of the forty it takes against the real feed.
+private enum NearbyLimitFixture {
+    static let o = PlannerFixture.stop("NL0", name: "O")
+    static let near1 = PlannerFixture.stop("NL1", eastMetres: 3_000, name: "Cerca sin ruta 1")
+    static let near2 = PlannerFixture.stop("NL2", northMetres: 20, eastMetres: 3_000, name: "Cerca sin ruta 2")
+    static let far = PlannerFixture.stop("NL3", northMetres: 700, eastMetres: 3_000, name: "Lejos con ruta")
+
+    static var provider: GTFSInMemory {
+        var lines = ["stop_id,stop_code,stop_name,stop_lat,stop_lon,wheelchair_boarding"]
+        for stop in [o, near1, near2, far] {
+            lines.append("\(stop.id),\(stop.gtfsStopCode),\(stop.name),"
+                         + "\(stop.latitude),\(stop.longitude),0")
+        }
+        return GTFSInMemory(texts: [
+            "agency.txt": """
+            agency_id,agency_name,agency_url,agency_timezone,agency_lang
+            1,Viguesa de Transportes S.L.,http://www.vitrasa.es/,Europe/Madrid,es
+            """,
+            "stops.txt": lines.joined(separator: "\n"),
+            "routes.txt": """
+            route_id,agency_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+            R1,1,L1,O - Lejos,3,ED4713,000000
+            """,
+            "trips.txt": """
+            route_id,service_id,trip_id,trip_headsign,direction_id,block_id,shape_id
+            R1,WEEK,T1,Lejos,0,B1,
+            """,
+            "stop_times.txt": """
+            trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+            T1,08:00:00,08:00:00,\(o.id),1,0,0
+            T1,08:10:00,08:10:00,\(far.id),2,0,0
+            """,
+            "calendar.txt": """
+            service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+            WEEK,1,1,1,1,1,1,1,20260901,20260910
+            """,
+            "calendar_dates.txt": "service_id,date,exception_type",
+            "shapes.txt": "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled",
+        ])
+    }
+
+    static func repository() throws -> TransitRepository {
+        let db = try AppDatabase.inMemory()
+        let parsed = try GTFSParser().parse(from: provider)
+        _ = try GTFSImporter(database: db).import(feed: parsed.feed, parseWarnings: parsed.warnings)
+        return TransitRepository(database: db)
+    }
+}
+
 @Suite("JourneyPlanner")
 struct JourneyPlannerTests {
 
@@ -199,6 +251,31 @@ struct JourneyPlannerTests {
         guard case .walk = journey.legs[0] else { Issue.record("expected a single walk leg"); return }
     }
 
+    /// H-19: querying two hours before the only bus makes the direct walk (~38 min) arrive
+    /// well before it (2 h wait plus a 10 min ride) — the case that used to make the whole
+    /// bus alternative disappear behind `.walkOnly`, even though it is the one alternative
+    /// "menos caminata" would actually want to offer, being the only one with no final walk
+    /// at all. Neither dominates the other (the walk arrives first, the bus walks less), so
+    /// both belong in the same list, and only the user's chosen criterion should decide
+    /// which one leads it.
+    @Test("A bus that arrives after a faster walk is still offered, not hidden behind it")
+    func walkAndBusCoexistWhenNeitherDominates() async throws {
+        let repository = try PlannerFacadeFixture.repository()
+        let planner = PlannerFacadeFixture.planner(repository: repository)
+        let result = try await planner.plan(PlanQuery(
+            origin: .coordinate(Coordinate(PlannerFacadeFixture.a), label: "A"),
+            destination: .coordinate(Coordinate(PlannerFacadeFixture.b), label: "B"),
+            departure: PlannerFacadeFixture.departure(
+                PlannerFacadeFixture.servedDay, hour: 6, minute: 0, calendar: repository.calendar)))
+        guard case .journeys(let journeys) = result.outcome else {
+            Issue.record("expected .journeys with both the walk and the bus in it, got \(result.outcome)")
+            return
+        }
+        #expect(journeys.contains { $0.transfers == 0 && $0.legs.count == 3 },
+                "the bus alternative — walk in, ride, walk out — has to survive")
+        #expect(journeys.contains { $0.legs.count == 1 }, "and so does the direct walk")
+    }
+
     @Test("A destination with no route and an unreasonable walk finds nothing")
     func noJourneyFound() async throws {
         let repository = try PlannerFacadeFixture.repository()
@@ -212,5 +289,35 @@ struct JourneyPlannerTests {
             Issue.record("expected .noJourneyFound, got \(result.outcome)"); return
         }
         #expect(horizon == PlannerOptions().searchHorizon)
+    }
+
+    /// H-11: `nearbyStops` returns nearest-first, so a limit tight enough to matter drops
+    /// the *reachable* stop first whenever it happens to be further away than the ones
+    /// nobody serves — exactly backwards from what should decide whether a stop is worth
+    /// keeping.
+    @Test("A reachable stop is not dropped just for being the farthest of the three nearby")
+    func nearbyStopsLimitDoesNotHideAReachableStop() async throws {
+        let repository = try NearbyLimitFixture.repository()
+        let destination = Coordinate(NearbyLimitFixture.near1)
+        let query = PlanQuery(
+            origin: .coordinate(Coordinate(NearbyLimitFixture.o), label: "O"),
+            destination: .coordinate(destination, label: "Destino"),
+            departure: PlannerFacadeFixture.departure(
+                ServiceDate(yyyymmdd: 20_260_903), hour: 7, minute: 55, calendar: repository.calendar))
+
+        let tooTight = PlannerFacadeFixture.planner(
+            repository: repository, options: PlannerOptions(maxNearbyStops: 2))
+        let tightResult = try await tooTight.plan(query)
+        guard case .walkOnly = tightResult.outcome else {
+            Issue.record("expected the bus excluded and the walk offered instead, got \(tightResult.outcome)")
+            return
+        }
+
+        let planner = PlannerFacadeFixture.planner(repository: repository)
+        let result = try await planner.plan(query)
+        guard case .journeys(let journeys) = result.outcome, !journeys.isEmpty else {
+            Issue.record("expected a journey with the default limit, got \(result.outcome)")
+            return
+        }
     }
 }

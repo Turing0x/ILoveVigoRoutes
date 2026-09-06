@@ -175,7 +175,11 @@ public struct TransitRepository: Sendable {
                 let d = Self.haversineMetres(latitude, longitude, stop.latitude, stop.longitude)
                 return d <= radiusMetres ? (stop, d) : nil
             }
-            .sorted { $0.1 < $1.1 }
+            // Twin stops across a road tie on distance, and `Array.sorted` is not stable
+            // (H-18): without a tiebreak, which one lands inside `limit` when it cuts a tie
+            // in half could differ between two runs of the same query. `stop.id` is a
+            // stable, if arbitrary, second key.
+            .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.id.rawValue < $1.0.id.rawValue }
             .prefix(limit)
 
             return try scored.map { stop, distance in

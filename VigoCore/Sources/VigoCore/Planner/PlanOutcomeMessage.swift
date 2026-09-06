@@ -61,10 +61,13 @@ public enum PlanOutcomeMessage {
         }
     }
 
-    /// Why a walk is being offered instead of a bus. Not a failure — the walk is the better
-    /// answer — but it needs saying, or it reads like the search gave up.
+    /// Why the only alternative is a walk. Not a failure — the walk is a real answer — but
+    /// it needs saying, or it reads like the search gave up. Since H-19, `.walkOnly` fires
+    /// exactly when no bus reaches the destination at all — a walk that merely arrives
+    /// before a real bus alternative is shown alongside it in `.journeys` instead, so this
+    /// explanation no longer has to speak of buses that were merely slower.
     public static let walkOnlyExplanation =
-        "Caminar es más rápido que cualquier autobús disponible."
+        "Ningún autobús llega hasta aquí."
 
     // MARK: - Detalles
 

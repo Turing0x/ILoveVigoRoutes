@@ -22,7 +22,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
-| **Auditoría del motor RAPTOR** | 🟡 Tandas 1–3 hechas (horas falsas; criterio incompleto; huecos de mutación). 4 en `AUDITORIA-RAPTOR.md` |
+| **Auditoría del motor RAPTOR** | ✅ Tandas 1–4 hechas. Detalle en `AUDITORIA-RAPTOR.md` |
 
 ---
 
@@ -2130,3 +2130,85 @@ compilan contra `generic/platform=iOS`.
 
 **Pendiente de esta auditoría:** Tanda 4 (H-10 a H-19, deuda y precisión) — en
 `AUDITORIA-RAPTOR.md` §8.
+
+## Auditoría del motor RAPTOR — Tanda 4: deuda y precisión
+
+Cuarta y última tanda de `AUDITORIA-RAPTOR.md`. Corrige H-10 a H-19 — diez hallazgos de deuda,
+precisión y una decisión de producto, ninguno crítico por sí solo, pero cada uno cerrado con
+su propio test donde tenía sentido tenerlo. Cierra la auditoría entera: **19/19 hallazgos
+tratados** en las cuatro tandas.
+
+**Cambios de comportamiento real:**
+
+- **H-11 — `nearbyStops` cortaba a 40 en silencio.** `JourneyPlanner` heredaba el límite
+  pensado para una lista de resultados de búsqueda, y contra el feed real ese límite ya se
+  alcanza en el centro de Vigo. Nuevo `PlannerOptions.maxNearbyStops` (100, con margen sobre
+  lo que un radio de 800 m produce hoy), pasado explícitamente en las dos llamadas del
+  planificador.
+- **H-13 — el constructor no comprobaba que los tiempos de un viaje fueran no decrecientes.**
+  `GTFSValidator` solo lo señala como aviso, no lo rechaza, así que un viaje así podía llegar
+  a `TimetableBuilder`. Tercera guarda en `flush()`, junto a las dos que ya había.
+  Verificado por mutación: quitar la guarda deja pasar el viaje.
+- **H-15 — nadie llamaba `TimetableStore.invalidateAll()`.** Se llama ahora desde
+  `AppEnvironment.refreshFeed`, junto a `favourites.reload()`/`savedPlaces.reload()` — el
+  mismo argumento («una reimportación deja obsoleto lo que había en caché») que ya se aplicaba
+  a esos dos.
+- **H-19 — `walkOnly` escondía todos los autobuses en cuanto la caminata llegaba antes,
+  incluso bajo «menos caminata».** Bajo ese criterio un trayecto solo a pie es la peor
+  respuesta posible por construcción, así que ocultar el autobús detrás de él era exactamente
+  al revés de lo que el criterio pide. Ahora la caminata se añade al mismo conjunto que los
+  autobuses y pasa por la misma dominancia de cinco ejes: si un autobús no la domina —un
+  cambio real de tiempo por no andar— sobrevive junto a ella, y `.walkOnly` queda reservado
+  para cuando de verdad no hay ningún autobús. Cambia el texto que ve el usuario
+  (`PlanOutcomeMessage.walkOnlyExplanation`, ya no habla de autobuses «disponibles» porque
+  bajo el nuevo significado no los hay) y el comentario del propio `PlanOutcome.walkOnly`.
+  Comprobado a mano que los dos tests existentes de `JourneyPlannerTests` (autobús que gana,
+  autobús que ya se fue) siguen pasando sin tocarlos: el primero porque el autobús domina a
+  la caminata en los cinco ejes, el segundo porque ahí no hay ningún autobús que ofrecer.
+
+**Arreglos internos, sin cambio de comportamiento observable:**
+
+- **H-14** — el `?? ride.trip` de reserva en el ajuste hacia atrás es demostrablemente
+  código muerto (la factibilidad que RAPTOR ya estableció garantiza que siempre hay un viaje
+  que cumple el límite); pasa a `assertionFailure` con el mismo valor de reserva, para que
+  quede dicho en vez de silencioso.
+- **H-17** — `EgressCandidate` gana `Hashable` propio sobre `(round, stop)` —su identidad
+  real— sustituyendo un hash a mano (`round &* 1_000_003 &+ stop`) que colisionaba por encima
+  de un espacio irreal para este feed, pero innecesario de todos modos.
+- **H-18** — desempate explícito por índice de parada en los dos sitios de
+  `JourneyReconstruction` que ordenan por llegada (`egressCandidates` y `trim`), y por
+  `stop.id` en `TransitRepository.nearbyStops`: `Array.sorted` no está documentado como
+  estable, así que un empate exacto podía depender de un detalle de implementación. **Con
+  matices honestos:** verificado por mutación que quitar el desempate de `nearbyStops` no
+  cambia nada (paradas gemelas nunca empatan en distancia con datos reales de latitud/longitud
+  de coma flotante); y que quitarlo en `egressCandidates`/`trim` **tampoco cambia el resultado
+  del test nuevo** — con solo tres elementos, el `sorted` de Swift resulta ser estable en la
+  práctica también sin el desempate explícito, confirmando exactamente la «confianza media»
+  con la que el informe marcó este hallazgo. El arreglo sigue siendo correcto — deja de
+  apoyarse en un comportamiento no garantizado — pero su verificación por mutación no fue
+  reproducible, y este documento no finge que sí.
+
+**Solo documentación, sin cambio de código:**
+
+- **H-10** — por qué no relajar footpaths en la ronda 0 puede perder una bajada junto a un
+  acceso, y por qué se cree sin impacto práctico dado cómo `nearbyStops` resuelve accesos.
+- **H-12** — el coste medido (108,6 ms) de que `TimetableBuilder.build` bloquee el ejecutor
+  del actor `TimetableStore`, y por qué se deja así por ahora.
+- **H-16** — la cota real del eje temporal (`Timetable`, nueva nota) y un `assert` en
+  `JourneyPlanner.scan` que la comprueba en el único punto donde una fecha externa entra en
+  la aritmética envolvente — documentación con dientes, no defensa contra lo imposible.
+
+**Verificado por mutación** donde había código que mutar: H-11 (revertir el paso del límite),
+H-13 (quitar la guarda), H-19 (revertir a la comparación antigua) — las tres cazadas
+limpiamente por su test correspondiente, revertido después.
+
+**Verificación.** Suite de `VigoCore`: **375 tests en verde** (371 antes de esta tanda, +4:
+`nearbyStopsLimitDoesNotHideAReachableStop`, `nonMonotonicTripIsDropped`,
+`tiedFrontIsBrokenDeterministically`, `walkAndBusCoexistWhenNeitherDominates`). Contra el
+feed real: suite de integración y de tiempos verde, planificación en frío en 167 ms.
+`xcodebuild` Debug y Release compilan contra `generic/platform=iOS`.
+
+**Cierra `AUDITORIA-RAPTOR.md`.** Los 19 hallazgos de las cuatro tandas, tratados: 16 con
+cambio de código y verificación, 3 solo con documentación donde el propio informe concluía
+que no hacía falta cambiar nada. Cifras finales: **375 tests en `VigoCore`** (321 antes de
+esta auditoría, +54 en total entre las cuatro tandas).

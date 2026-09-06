@@ -10,6 +10,13 @@ import Foundation
 /// reentrant and let two callers start building the same snapshot at once. Actor isolation
 /// alone already gives "two concurrent requests wait for one build"; no `inFlight` bookkeeping
 /// is needed on top of it.
+///
+/// The cost of that same fact (H-12): `build` is synchronous and its SQLite reads are
+/// blocking, so a cache miss ties up one of the cooperative pool's threads for its whole
+/// duration — measured at 108.6 ms against the real feed. Swift 6 generally asks actors not
+/// to do this. Left as is for now: the pool has more threads than this ever needs at once,
+/// and the alternative (moving the build to a dedicated thread and resuming a continuation)
+/// is worth doing only if this number grows enough to matter.
 public actor TimetableStore {
     private let repository: TransitRepository
     private let options: PlannerOptions

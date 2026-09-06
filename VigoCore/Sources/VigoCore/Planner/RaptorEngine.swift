@@ -127,6 +127,15 @@ public struct RaptorEngine: Sendable {
         //
         // Footpaths are deliberately not relaxed here: the access radius is already the
         // walking layer, and letting it chain would allow walks of radius + 300 m.
+        //
+        // The other half of that trade-off (H-10, confidence medium — not reproduced against
+        // real access/egress geometry): a stop reached only by a footpath *from* an access
+        // point, and never by riding to it directly, is invisible to round 1 — its own
+        // `bestArrival` is never set by round 0, so a ride that would otherwise alight there
+        // in round 1 can be pruned by `targetBest` before it gets the chance. In practice
+        // `JourneyPlanner` resolves access from `nearbyStops` on the same 800 m radius used
+        // here, so a stop within a short footpath of an access point is almost always in the
+        // access list too — this is believed to be latent on real queries, not observed.
         var marked = [Bool](repeating: false, count: stopCount)
         for entry in query.access {
             let stop = Int(entry.stop)

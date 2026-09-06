@@ -257,4 +257,71 @@ struct EgressCandidatesTests {
         #expect(journeys.map(JourneyOrdering.egressWalkSeconds).min() == 100,
                 "la parada que menos anda tiene que sobrevivir al corte; un prefix por llegada la habría tirado")
     }
+
+    /// H-18: three independent one-hop patterns arrive three different exits at the exact
+    /// same instant, each with the exact same walk out — tied on both axes at once, so
+    /// nothing in the dominance filter or the sort's own comparator breaks the tie.
+    /// `Array.sorted` is not documented as stable, and without an explicit tiebreak `trim`'s
+    /// choice of which two of the three survive would rest on an implementation detail.
+    private func tiedThreeWaysTimetable() -> (timetable: Timetable, exits: [Int]) {
+        let stops = (0..<6).map { PlannerFixture.stop("TT\($0)", eastMetres: Double($0) * 200) }
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+        // Patterns 0..2: access stop 2k boards straight onto exit stop 2k+1, all arriving
+        // at the same instant.
+        var patternStopsOffset: [Int32] = [0]
+        var patternStops: [Int32] = []
+        var patternTripsOffset: [Int32] = [0]
+        var tripRefs: [TripRef] = []
+        var patternTimesOffset: [Int32] = []
+        var tripArrival: [Int32] = []
+        var tripDeparture: [Int32] = []
+        var patternRouteID: [RouteID] = []
+        var patternRouteShortName: [String] = []
+        var stopPatternPattern: [Int32] = Array(repeating: 0, count: 6)
+        var stopPatternPosition: [Int32] = Array(repeating: 0, count: 6)
+        for pattern in 0..<3 {
+            let access = pattern * 2, exit = pattern * 2 + 1
+            patternStops.append(contentsOf: [Int32(access), Int32(exit)])
+            patternStopsOffset.append(Int32(patternStops.count))
+            patternTimesOffset.append(Int32(tripArrival.count))
+            tripRefs.append(TripRef(tripID: TripID("T\(pattern)"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                                    dayOffsetSeconds: 0, headsign: nil))
+            tripArrival.append(contentsOf: [at(9, 0), at(9, 10)])
+            tripDeparture.append(contentsOf: [at(9, 0), at(9, 10)])
+            patternTripsOffset.append(Int32(tripRefs.count))
+            patternRouteID.append(RouteID("R\(pattern)")); patternRouteShortName.append("L\(pattern)")
+            stopPatternPattern[access] = Int32(pattern); stopPatternPosition[access] = 0
+            stopPatternPattern[exit] = Int32(pattern); stopPatternPosition[exit] = 1
+        }
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: patternStopsOffset, patternStops: patternStops,
+            patternTripsOffset: patternTripsOffset, tripRefs: tripRefs,
+            patternTimesOffset: patternTimesOffset, tripArrival: tripArrival, tripDeparture: tripDeparture,
+            patternRouteID: patternRouteID, patternRouteShortName: patternRouteShortName,
+            stopPatternsOffset: (0...6).map(Int32.init),
+            stopPatternPattern: stopPatternPattern, stopPatternPosition: stopPatternPosition,
+            footpathOffset: Array(repeating: 0, count: 7), footpathTarget: [], footpathSeconds: [],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, [1, 3, 5])
+    }
+
+    @Test("A three-way tie on both axes is broken the same way every time")
+    func tiedFrontIsBrokenDeterministically() throws {
+        let n = tiedThreeWaysTimetable()
+        let query = RaptorQuery(
+            access: [StopWalk(stop: 0, seconds: 0), StopWalk(stop: 2, seconds: 0), StopWalk(stop: 4, seconds: 0)],
+            egress: n.exits.map { StopWalk(stop: Int32($0), seconds: 500) },
+            departure: at(9, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine().run(n.timetable, query)
+
+        let front = JourneyReconstruction.egressCandidates(upTo: 1, result: result, query: query, limit: 3)
+        try #require(front.count == 3, "all three tie on arrival and on walk, so none dominates the others")
+
+        let trimmed = JourneyReconstruction.egressCandidates(upTo: 1, result: result, query: query, limit: 2)
+        #expect(trimmed.map(\.stop) == [1, 5],
+                "lowest and highest stop index, the documented tiebreak — not whatever order the sort left them in")
+    }
 }

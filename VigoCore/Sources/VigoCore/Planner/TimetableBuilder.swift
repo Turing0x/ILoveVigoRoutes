@@ -212,6 +212,17 @@ public struct TimetableBuilder: Sendable {
             var departures: [Int32] = []
             var usable = true
 
+            // A time that moves backwards along a trip is not something the forward sweep
+            // in `RaptorEngine` can make sense of: it does not fail, it silently returns a
+            // journey that is merely plausible. `GTFSValidator` checks this feed-wide at
+            // import time (`DATA-SOURCES.md`: 0 non-monotonic sequences in the published
+            // feed today), but that is a property of *this* feed, not a guarantee the reader
+            // enforces — so it is repeated here, on data already in hand, at the cost of one
+            // linear pass over arrays several orders of magnitude smaller than the feed.
+            func isNonDecreasing(_ values: [Int32]) -> Bool {
+                zip(values, values.dropFirst()).allSatisfy { $0 <= $1 }
+            }
+
             func flush() {
                 defer {
                     stops.removeAll(keepingCapacity: true)
@@ -223,6 +234,9 @@ public struct TimetableBuilder: Sendable {
                 // One stop time is not a trip anyone can ride.
                 guard stops.count >= 2, let lastArrival = arrivals.last,
                       let lastDeparture = departures.last else { return }
+                // Same reasoning as the guard just above: half a trip is worse than none,
+                // and so is one that runs backwards.
+                guard isNonDecreasing(arrivals), isNonDecreasing(departures) else { return }
                 if onlyPastMidnight {
                     // Yesterday only reaches today through the trips that run past
                     // midnight. Everything else on that day is already over.

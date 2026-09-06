@@ -64,6 +64,63 @@ private enum DSTFixture {
     }
 }
 
+/// One trip whose middle stop arrives *before* the one before it — `GTFSValidator` only
+/// flags this as an advisory (`stopTimes.nonMonotonic`), it does not reject the import, so a
+/// row shaped like this really can reach `TimetableBuilder`.
+private enum BackwardsFixture {
+    static let stops = """
+    stop_id,stop_code,stop_name,stop_lat,stop_lon,wheelchair_boarding
+    BW1,PBW1,A,42.2209973130163,-8.73283517659561,0
+    BW2,PBW2,B,42.2250000000000,-8.73000000000000,0
+    BW3,PBW3,C,42.2358735452815,-8.72008331665535,0
+    """
+
+    static let routes = """
+    route_id,agency_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+    R1,1,BK,VOLVE ATRÁS,3,000000,000000
+    """
+
+    static let trips = """
+    route_id,service_id,trip_id,trip_headsign,direction_id,block_id,shape_id
+    R1,BW,T_BACK,C,0,B1,
+    """
+
+    /// 08:00 → 07:50 → 08:10: the middle stop arrives ten minutes before the first one.
+    static let stopTimes = """
+    trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+    T_BACK,08:00:00,08:00:00,BW1,1,0,0
+    T_BACK,07:50:00,07:50:00,BW2,2,0,0
+    T_BACK,08:10:00,08:10:00,BW3,3,0,0
+    """
+
+    static let calendar = """
+    service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date
+    """
+
+    static let calendarDates = """
+    service_id,date,exception_type
+    BW,20260904,1
+    """
+
+    static func timetable() throws -> Timetable {
+        let provider = GTFSInMemory(texts: [
+            "agency.txt": Fixture.agency,
+            "stops.txt": stops,
+            "routes.txt": routes,
+            "trips.txt": trips,
+            "stop_times.txt": stopTimes,
+            "calendar.txt": calendar,
+            "calendar_dates.txt": calendarDates,
+            "shapes.txt": "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled",
+        ])
+        let db = try AppDatabase.inMemory()
+        let parsed = try GTFSParser().parse(from: provider)
+        _ = try GTFSImporter(database: db).import(feed: parsed.feed, parseWarnings: parsed.warnings)
+        let repository = TransitRepository(database: db)
+        return try TimetableBuilder(repository: repository).build(anchor: ServiceDate(yyyymmdd: 20_260_904))
+    }
+}
+
 @Suite("Timetable construction")
 struct TimetableBuilderTests {
 
@@ -238,6 +295,19 @@ struct TimetableBuilderTests {
 
         let groups = TimetableBuilder.nonOvertakingGroups([0, 1], in: [x, y])
         #expect(groups.count == 2, "X's dwell has to split them into two patterns")
+    }
+
+    /// H-13: `GTFSValidator` only flags a backwards stop time as an advisory, it does not
+    /// reject the import — so `TimetableBuilder` reading straight from the database was
+    /// trusting an ordering nothing had actually enforced. Half a trip is worse than none,
+    /// the same argument `flush()`'s existing guards already make; a trip that runs
+    /// backwards is worse than either.
+    @Test("A trip whose middle stop arrives before the one before it is dropped, not folded in")
+    func nonMonotonicTripIsDropped() throws {
+        let timetable = try BackwardsFixture.timetable()
+        #expect(timetable.patternCount == 0)
+        #expect(timetable.tripCount == 0)
+        #expect(timetable.stopCount == 3, "the stops themselves still exist")
     }
 
     /// A line with no trips must not produce a pattern, for the same reason the stop

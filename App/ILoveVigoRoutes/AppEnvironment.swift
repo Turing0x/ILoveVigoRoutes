@@ -117,9 +117,13 @@ final class AppEnvironment {
             if case .imported(let summary) = outcome { lastImportSummary = summary }
             feedStatus = (try? repository.feedStatus()) ?? feedStatus
             // A reimport rewrites `stop` wholesale: every `Stop` value cached in
-            // `favourites` and `savedPlaces` is stale until reloaded.
+            // `favourites` and `savedPlaces` is stale until reloaded, and every `Timetable`
+            // `TimetableStore` is holding describes a feed that no longer exists. Its cache
+            // key already stops a stale snapshot from being served (`feedFingerprint`), so
+            // this is only to free the memory now rather than waiting for eviction.
             favourites.reload()
             savedPlaces.reload()
+            await timetableStore.invalidateAll()
             return outcome
         } catch {
             importFailure = (error as? CustomStringConvertible)?.description

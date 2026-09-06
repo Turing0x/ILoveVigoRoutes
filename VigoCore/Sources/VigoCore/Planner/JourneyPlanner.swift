@@ -19,7 +19,10 @@ public struct PlanQuery: Sendable, Hashable {
 /// kind of silent wrong answer this project's design explicitly rules out (`README.md`).
 public enum PlanOutcome: Sendable {
     case journeys([Journey])
-    /// Walking beats every bus alternative found (or none was found at all).
+    /// No bus reaches the destination at all (H-19). A walk that merely beats every bus
+    /// by raw arrival time is folded into `.journeys` instead of hiding them: under "least
+    /// walking" a walk-only journey is the worst possible answer by definition, so a search
+    /// that could otherwise offer real alternatives must not present only this one.
     case walkOnly(Journey)
     case noStopsNearOrigin(radiusMetres: Double)
     case noStopsNearDestination(radiusMetres: Double)
@@ -66,13 +69,13 @@ public struct JourneyPlanner: Sendable {
         let destinationCoordinate = query.destination.coordinate
         let access = try repository.nearbyStops(
             latitude: originCoordinate.latitude, longitude: originCoordinate.longitude,
-            radiusMetres: options.accessRadiusMetres)
+            radiusMetres: options.accessRadiusMetres, limit: options.maxNearbyStops)
         guard !access.isEmpty else {
             return finish(.noStopsNearOrigin(radiusMetres: options.accessRadiusMetres), feedStatus: feedStatus)
         }
         let egress = try repository.nearbyStops(
             latitude: destinationCoordinate.latitude, longitude: destinationCoordinate.longitude,
-            radiusMetres: options.accessRadiusMetres)
+            radiusMetres: options.accessRadiusMetres, limit: options.maxNearbyStops)
         guard !egress.isEmpty else {
             return finish(.noStopsNearDestination(radiusMetres: options.accessRadiusMetres), feedStatus: feedStatus)
         }
@@ -119,17 +122,23 @@ public struct JourneyPlanner: Sendable {
                     transfers: 0)
         }
 
-        guard let bestBus = alternatives.first else {
+        guard !alternatives.isEmpty else {
             guard walkIsViable else {
                 return finish(.noJourneyFound(horizon: options.searchHorizon), feedStatus: feedStatus)
             }
             return finish(.walkOnly(walkOnlyJourney()), feedStatus: feedStatus)
         }
-        if walkIsViable,
-           query.departure.addingTimeInterval(TimeInterval(directWalkSeconds)) < bestBus.arrival {
-            return finish(.walkOnly(walkOnlyJourney()), feedStatus: feedStatus)
+        // H-19: the walk is folded into the same pool the bus alternatives came from,
+        // rather than replacing them outright whenever it happens to arrive first. Under
+        // "menos caminata" a walk-only journey is the worst possible answer by construction
+        // (`JourneyOrdering.egressWalkSeconds` counts the whole thing as final walk), so a
+        // bus that leaves it undominated — a real trade of time for not walking the whole
+        // way — is exactly the alternative that criterion exists to surface, not to hide
+        // behind a walk that merely has the earliest raw arrival.
+        guard walkIsViable else {
+            return finish(.journeys(alternatives), feedStatus: feedStatus)
         }
-        return finish(.journeys(alternatives), feedStatus: feedStatus)
+        return finish(.journeys(ranked(alternatives + [walkOnlyJourney()])), feedStatus: feedStatus)
     }
 
     // MARK: - Alternatives across departures
@@ -146,6 +155,13 @@ public struct JourneyPlanner: Sendable {
     private func scan(timetable: Timetable, access: [StopWalk], egress: [StopWalk],
                      query: PlanQuery) -> [Journey] {
         let start = Int32(timetable.axisSeconds(for: query.departure))
+        // The one place an external `Date` enters the axis `RaptorEngine` does its `&+`/`&-`
+        // arithmetic on (H-16, `Timetable`'s own doc comment has the full argument). `plan`
+        // already turned away anything outside the feed's window before this is ever
+        // called, so this is a documentation-as-code check, not a defence against a caller
+        // that could otherwise reach here — ten days is generous headroom either side of the
+        // roughly two the timetable itself ever spans.
+        assert(abs(start) < Int32(10 * 86_400), "departure is nowhere near the timetable's axis")
         let deadline = start &+ Int32(options.searchHorizon)
         var departure = start
         var collected: [Journey] = []

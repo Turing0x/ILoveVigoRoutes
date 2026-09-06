@@ -38,7 +38,7 @@ public enum JourneyReconstruction {
         var byTransfersAscending: [Journey] = []
         // Everything else on the egress front: the stops that trade arrival for a shorter walk.
         var closerOnFoot: [Journey] = []
-        var seenExits = Set<Int>()
+        var seenExits = Set<EgressCandidate>()
         var lastRound = -1
 
         for round in 1...result.roundsRun {
@@ -49,7 +49,7 @@ public enum JourneyReconstruction {
             if fastest.round != lastRound, let journey = build(fastest) {
                 lastRound = fastest.round
                 byTransfersAscending.append(journey)
-                seenExits.insert(exitKey(fastest))
+                seenExits.insert(fastest)
             }
 
             // The rest bypass the transfer filter below on purpose. That filter answers "is
@@ -57,7 +57,7 @@ public enum JourneyReconstruction {
             // pose; whether they earn a place is decided by `JourneyPlanner.ranked`, whose
             // dominance test knows about the final walk.
             for candidate in candidates.dropFirst() {
-                guard seenExits.insert(exitKey(candidate)).inserted,
+                guard seenExits.insert(candidate).inserted,
                       let journey = build(candidate) else { continue }
                 closerOnFoot.append(journey)
             }
@@ -81,21 +81,25 @@ public enum JourneyReconstruction {
         return JourneyShortlist.cut(kept + closerOnFoot, to: options.maxCandidates)
     }
 
-    /// Identity of a way out, for deduplication across rounds: the same stop reached with the
-    /// same number of vehicles reconstructs to the same journey.
-    private static func exitKey(_ candidate: EgressCandidate) -> Int {
-        candidate.round &* 1_000_003 &+ candidate.stop
-    }
-
     /// One way out of the network: which stop to get off at, after how many vehicles, and
     /// what it costs on foot afterwards.
-    struct EgressCandidate: Equatable {
+    ///
+    /// `Hashable` on `(round, stop)` alone — that pair is the identity for deduplication
+    /// across rounds (the same stop reached with the same number of vehicles reconstructs to
+    /// the same journey), and `seconds`/`arrival` are derived from it, never independent of
+    /// it. H-17: this replaces a hand-rolled `round &* 1_000_003 &+ stop` integer key, which
+    /// collided above roughly 1.15 million patterns worth of round·stop space — nowhere near
+    /// reachable at this feed's size, but a real `Hashable` costs nothing extra to get right.
+    struct EgressCandidate: Hashable {
         let round: Int
         let stop: Int
         /// Seconds on foot from that stop to the real destination.
         let seconds: Int32
         /// Door-to-door arrival, this walk included.
         let arrival: Int32
+
+        static func == (a: Self, b: Self) -> Bool { a.round == b.round && a.stop == b.stop }
+        func hash(into hasher: inout Hasher) { hasher.combine(round); hasher.combine(stop) }
     }
 
     /// The ways out of the network worth reconstructing, using at most `round` vehicles.
@@ -138,7 +142,12 @@ public enum JourneyReconstruction {
                     && (other.arrival < candidate.arrival || other.seconds < candidate.seconds)
             }
         }
-        return trim(front.sorted { $0.arrival < $1.arrival }, to: limit)
+        // Ties on arrival are real — two egress stops equidistant from the door reached at
+        // the same instant — and `Array.sorted` is not stable, so without a tiebreak two
+        // builds of the same front could hand `trim` its ends in a different order (H-18).
+        // The stop index is arbitrary but fixed, which is all a tiebreak needs to be.
+        return trim(front.sorted { $0.arrival != $1.arrival ? $0.arrival < $1.arrival : $0.stop < $1.stop },
+                   to: limit)
     }
 
     /// Cuts the front to `limit` **from both ends**, not from the front.
@@ -160,7 +169,7 @@ public enum JourneyReconstruction {
             if fromLow { low += 1 } else { high -= 1 }
             fromLow.toggle()
         }
-        return picked.sorted { $0.arrival < $1.arrival }
+        return picked.sorted { $0.arrival != $1.arrival ? $0.arrival < $1.arrival : $0.stop < $1.stop }
     }
 
     // MARK: - Forward reconstruction
@@ -256,8 +265,20 @@ public enum JourneyReconstruction {
                                       position: rides[rides.count - 1].alightPosition)
         for index in stride(from: rides.count - 1, through: 0, by: -1) {
             let ride = rides[index]
-            let latest = latestTrip(timetable, pattern: ride.pattern,
-                                    position: ride.alightPosition, atMost: limit) ?? ride.trip
+            // `latestTrip` cannot actually return `nil` here (H-14): `ride.trip` itself
+            // already satisfies `arrival(..., ride.trip, ...) <= limit` — it is either the
+            // last ride, whose own arrival *is* `limit`, or an earlier one whose connection
+            // to the ride after it was already fixed to respect this same bound — so the
+            // search always has at least `ride.trip` to find. `?? ride.trip` would make that
+            // reasoning silent and untestable; this keeps the same fallback but says so.
+            let latest: Int
+            if let found = latestTrip(timetable, pattern: ride.pattern,
+                                      position: ride.alightPosition, atMost: limit) {
+                latest = found
+            } else {
+                assertionFailure("ride.trip already meets `limit`, so latestTrip must find at least it")
+                latest = ride.trip
+            }
             rides[index].trip = latest
             let boardTime = timetable.departure(pattern: ride.pattern, trip: latest,
                                                 position: ride.boardPosition)
