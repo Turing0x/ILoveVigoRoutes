@@ -19,7 +19,8 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 7 — Un solo buscador, dos pestañas** | ✅ Hecha y fusionada a `main` |
 | **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
-| **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha. Pendiente de comprobación en dispositivo |
+| **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
+| **Fase 11 — Trayecto activo persistente** | 🟡 En marcha |
 
 ---
 
@@ -1432,9 +1433,11 @@ lo caro sigue siendo leer `shapePoint`, y eso sigue haciéndose solo para las vi
 
 **Pendiente de comprobar en dispositivo** (lo hace el propietario):
 
-- [ ] Un destino con dos paradas de bajada plausibles: ¿«Menos caminata» ofrece de verdad otra
-      opción, o la misma reordenada?
-- [ ] El menú de tres opciones cabe en la cabecera sin partir la fila
-- [ ] Cambiar de criterio con una alternativa resaltada: el mapa redibuja la correcta
-- [ ] El criterio elegido sobrevive a matar y relanzar la app
-- [ ] Con «Llega antes» la app se comporta como antes de esta fase
+- [x] Un destino con dos paradas de bajada plausibles: «Menos caminata» ofrece de verdad otra
+      opción, no la misma reordenada
+- [x] El menú de tres opciones cabe en la cabecera sin partir la fila
+- [x] Cambiar de criterio con una alternativa resaltada: el mapa redibuja la correcta
+- [x] El criterio elegido sobrevive a matar y relanzar la app
+- [x] Con «Llega antes» la app se comporta como antes de esta fase
+
+**Verificado en dispositivo por el propietario el 2026-09-06. Fase 10 cerrada del todo.**
