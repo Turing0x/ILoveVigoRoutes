@@ -14,6 +14,17 @@ public struct Coordinate: Sendable, Hashable {
     public init(_ stop: Stop) {
         self.init(latitude: stop.latitude, longitude: stop.longitude)
     }
+
+    /// Rounds to `decimals` decimal places — four is roughly 11 m, the resolution
+    /// `MapSearchSheet` throttles "Cerca de ti" on so GPS jitter alone does not relaunch that
+    /// query, and the resolution `PLAN-FASES-8-13.md` §12.3 specifies for `recentSearch`'s
+    /// `dedupKey`. Kept here once, not copied at each call site, so the two cannot drift
+    /// apart (H-48).
+    public func rounded(toDecimals decimals: Int) -> Coordinate {
+        let factor = pow(10.0, Double(decimals))
+        return Coordinate(latitude: (latitude * factor).rounded() / factor,
+                          longitude: (longitude * factor).rounded() / factor)
+    }
 }
 
 /// A walk between two stops, in the compact index space of the array the paths were

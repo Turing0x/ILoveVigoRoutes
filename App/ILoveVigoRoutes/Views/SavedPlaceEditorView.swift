@@ -167,7 +167,12 @@ struct SavedPlaceEditorView: View {
             .sheet(isPresented: $pickingAnchor) {
                 MapSearchSheet(purpose: .standalone(title: "Punto del lugar"),
                                onPick: { place in
-                                   anchorInput = Self.input(for: place.place)
+                                   // `place.savedEndpointInput.anchor`, not `input(for:)`
+                                   // (H-37): a `MapPlace` is available here, and its `origin`
+                                   // is the same source of truth `MapPlace.savedEndpoint`
+                                   // reads on the way back in — one rule instead of two that
+                                   // have to be kept in step by hand.
+                                   anchorInput = place.savedEndpointInput.anchor
                                    anchorSummary = place.label
                                    pickingAnchor = false
                                },
@@ -189,6 +194,10 @@ struct SavedPlaceEditorView: View {
         dismiss()
     }
 
+    /// Only for `.createFrom(Place)`, where there is no `MapPlace` to read an `origin` from
+    /// — a bare `Place` has exactly these two cases, with nothing left to disambiguate the
+    /// way `MapPlace.origin` sometimes has to (see `savedEndpointInput`), so this is not a
+    /// second copy of that rule, just its narrower half.
     private static func input(for place: Place) -> SavedPlaceAnchorInput {
         switch place {
         case .stop(let stop): .stop(stop)

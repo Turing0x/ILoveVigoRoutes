@@ -21,7 +21,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
-| **Auditoría del buscador** | 🟡 Tandas A, B y C hechas. D en `AUDITORIA-BUSCADOR.md` |
+| **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
 
 ---
 
@@ -1615,7 +1615,10 @@ propia auditoría como sin cubrir).
 **Deliberadamente en esta tanda y no en otra:** H-40, H-42 y H-43 son hallazgos de
 testabilidad del informe (tests que faltaban, no comportamiento que faltara arreglar) que se
 resolvieron aquí porque tocan exactamente el código que esta tanda ya estaba reescribiendo
-— separarlos en su propia tanda habría sido reabrir el mismo fichero dos veces.
+— separarlos en su propia tanda habría sido reabrir el mismo fichero dos veces. H-41 (la rama
+de prefijo numérico sin cubrir) queda cubierto igual, aunque sin un test que lleve su nombre:
+`numericExactAndPrefixTogetherRespectLimitAndLeadingZero`, más arriba, ejercita esa misma
+rama al verificar H-02 y H-03.
 
 Pendiente: Tandas B (UI honesta y la ruta accesible de "Elegir en el mapa"), C (direcciones —
 `MapKitAddressSearchService`) y D (deuda del buscador y desbloqueo de la Fase 12), en
@@ -1789,3 +1792,129 @@ pediría un doble de `MKLocalSearchCompleter`, que MapKit no ofrece.
 
 Pendiente: Tanda D (deuda del buscador y desbloqueo de la Fase 12), en
 `AUDITORIA-BUSCADOR.md` §6.
+
+## Auditoría del buscador — Tanda D: deuda del buscador único y desbloqueo de la Fase 12
+
+Última tanda. Corrige H-34, H-36, H-37, H-38, H-48, H-07 y H-46 de `AUDITORIA-BUSCADOR.md`, y
+con eso quedan cerrados los 48 hallazgos que ese informe repartía en cuatro tandas — ver el
+resumen al final de esta sección.
+
+**H-34 — el extremo de un trayecto guardado ya pasa por `pick(_:)`.** En `purpose ==
+.endpoint(role)`, elegir un extremo llamaba a `onPick(...)` directamente, saltándose el único
+embudo del que depende la Fase 12. `purpose == .explore` sigue sin pasar por aquí, a propósito
+—no hay un único `MapPlace` que registrar cuando se planifica el trayecto entero— y ahora lo
+dice el propio código, no solo este documento.
+
+**H-36 — `EndpointPickerSheet` eliminado.** `SavedJourneyEditorView` abría una hoja propia que
+solo repetía «Lugares guardados» —ya la primera sección del estado vacío de `MapSearchSheet`—
+detrás de un toque extra a «Elegir otro lugar». Los dos `.sheet` que la presentaban pasan a
+abrir `MapSearchSheet(purpose: .standalone(...))` directamente, igual que ya hacía
+`SavedPlaceEditorView`. Es la misma reducción que la Fase 7 hizo con `PlacePickerView`, sobre
+el mismo argumento: un buscador, no dos formas de llegar a él.
+
+**H-37 — `SavedPlaceEditorView` usa `savedEndpointInput`, no una segunda copia de la regla.**
+Dos sitios derivaban un `SavedPlaceAnchorInput` a partir de lo elegido en el buscador: uno
+correcto por necesidad (`input(for: Place)`, para `.createFrom(Place)`, donde no hay ningún
+`MapPlace` del que leer `origin` — se queda, con el comentario que explica por qué no es una
+duplicación), y otro que sí lo era (`pickingAnchor`'s `onPick`, que **sí** recibe un
+`MapPlace` completo y lo desmontaba a mano en vez de llamar a
+`place.savedEndpointInput.anchor`, que ya existía). Corregido el segundo.
+
+**H-38 — `MapPlace.savedEndpoint` deriva el origen del ancla, no del enlace vivo.** Cuando un
+extremo de trayecto guardado no estaba enlazado a un lugar guardado
+(`endpoint.placeID == nil`), el origen caía siempre a `.address` — aunque el ancla fuera una
+parada real. Consecuencia: icono equivocado (`mappin.and.ellipse` en vez de `bus.fill`),
+`MapPlace.stop` devolviendo `nil` y perdiendo «Ver llegadas» y la estrella de favorito, y un
+`savedEndpointInput` que al volver a guardar perdía el `stopID`. Ahora el origen sale del
+ancla: `.stop(stop)` cuando `anchor.resolvedStop` existe, `.droppedPin` en los demás casos
+—incluido un `.orphanedStop`, que no lleva ningún `Stop` con el que poblar `.stop(_:)`, así
+que `.droppedPin` es la respuesta honesta y no una regresión respecto de lo que había—.
+**Un test que ya existía, `MapNavigationStateTests.adHocEndpointIsNotLinked`, esperaba el
+`.address` de antes** (su nombre — «no finge estarlo» — apuntaba a lo importante: que no se
+hiciera pasar por un lugar guardado — y eso lo sigue comprobando `place.stop == nil`); se ha
+corregido para esperar `.droppedPin`, con una línea explicando por qué.
+
+**H-48 — el redondeo de coordenada sube a `Coordinate.rounded(toDecimals:)`, en `VigoCore`.**
+`MapSearchSheet.roundedCoordinate` tenía su propia fórmula, privada y sin test, para el mismo
+redondeo a ~11 m que `PLAN-FASES-8-13.md` §12.3 cita como la fuente del `dedupKey` de la Fase
+12. Una tercera copia de la misma regla —tras la propia vista y el enunciado del plan— es
+exactamente lo que se evita subiéndola una vez, testeada, a donde la Fase 12 ya la va a
+necesitar.
+
+**H-07 — medido de nuevo tras la Tanda A, y encontrado un coste que la propia Tanda A había
+introducido.** El informe pedía revisar si la reescritura de `searchStops` había encarecido la
+consulta. Vuelto a medir contra el feed real (mismo archivo de la auditoría): las consultas
+normales siguen costando 0,3–0,8 ms, pero `searchStops("a")` —una sola letra, el caso
+patológico de la puntuación por relevancia añadida en la Tanda A— costaba **7,656 ms**, ~13
+veces más que antes. La causa: el nivel «aparece en cualquier parte» ya no tenía límite en SQL
+y una letra común casa con la mayoría de las 1154 filas, cada una puntuada y ordenada en
+Swift. Un `.limit(limit * 4)` en esa consulta —generoso de sobra para cualquier consulta real,
+cuyo nivel «contains» ya es mucho más pequeño— baja el coste a 2,184 ms sin tocar el resultado
+de ninguna consulta real. Sobre el índice `stop_searchName` en sí: seguía sin acelerar el
+`LIKE` (confirmado otra vez con `EXPLAIN QUERY PLAN`, `SCAN` en vez de `SEARCH`, por no llevar
+colación `NOCASE`), pero no habría arreglado el caso que sí importaba —un patrón `%a%` con
+comodín inicial no puede usar ningún índice, tenga la colación que tenga—, así que no se ha
+añadido una migración `v4` solo para esto; el comentario junto al índice ahora explica las dos
+cosas: por qué escanea y por qué, aun así, no hace falta tocarlo.
+
+**H-46 — corregidas §12.1 y §12.4 de `PLAN-FASES-8-13.md`, antes de que la Fase 12 las
+herede.** Dos correcciones, con nota explicando por qué:
+- `.pointOfInterest` no pertenece a la lista de lo que «se guarda»: ese origen solo lo produce
+  un toque directo en el mapa (`MapScreenModel.selectPointOfInterest`), nunca el buscador.
+  Antes de implementar la fase hace falta decidir si se deja fuera (como
+  `.currentLocation`) o si se registra desde `MapNavigationState.select` en vez de
+  `pick(_:)` — las dos opciones quedan escritas, sin decidir por el plan.
+- «Seis sitios llaman a `pick`» no se correspondía con el código: incluía «POI» (que no pasa
+  por aquí) y contaba «parada» y «favorita» como dos sitios cuando son la misma función
+  (`stopRow`) en dos secciones; no contaba la fila de lugar guardado. Corregida la
+  enumeración, y añadido el extremo de trayecto guardado que H-34 acaba de sumar.
+
+**Verificación.** Suite de `VigoCore`: **359 tests en verde** (+5: `MapPlaceTests.swift`,
+nuevo, cuatro casos para H-38 y uno para H-48; más la corrección del test existente para
+H-38). Target de app: **18 tests en verde**, sin cambios propios — esta tanda es reordenar
+llamadas ya cubiertas por los tests de otras tandas, no lógica nueva en el target de app.
+`xcodebuild` Debug y Release contra `generic/platform=iOS` compilan.
+
+**Verificado por mutación:** volver `MapPlace.savedEndpoint` al `.address` fijo de antes tumba
+seis aserciones — los cuatro tests nuevos de `MapPlaceTests` y las dos del test corregido en
+`MapNavigationStateTests`.
+
+**No verificado interactivamente**, por la misma razón que en la Tanda B: los toques cerca del
+borde inferior de la pantalla no llegaban a los controles del simulador en esta sesión.
+Pendiente en dispositivo, del propietario: elegir un lugar guardado como destino de un
+trayecto guardado, renombrar el lugar, y comprobar que el nombre del extremo cambia — la
+prueba de que quitar `EndpointPickerSheet` no se llevó el enlace vivo por delante.
+
+---
+
+### Auditoría del buscador — cierre
+
+Las cuatro tandas que `AUDITORIA-BUSCADOR.md` §6 planificó están hechas: 11 hallazgos en la A
+(los 8 de su lista más H-40, H-42 y H-43, de testabilidad, cubiertos por los mismos tests que
+ya tocaban ese código), 15 en la B (6 de su lista, más los 4 que `SearchLayoutBuilder`
+resuelve —H-21, H-22, H-23, H-28— y los 3 que `LineMatching` resuelve —H-25, H-26, H-39—, más
+H-08, que ningún borrador de tanda había repartido y se hizo aquí por tocar exactamente el
+mismo `.onChange`/`.task`), 8 en la C, y 7 en la D. H-20 se revisó y no se aplicó — no se
+consiguió reproducir el escenario que describía contra el código actual, y queda dicho por qué
+en la sección de la Tanda C.
+
+**Lo que el plan de cuatro tandas nunca repartió, y sigue abierto:** H-11 (tolerancia a
+erratas — el propio informe ya decía «no lo arreglaría todavía», a la espera de que H-09/H-10
+por sí solos redujeran cuánto hacía falta), H-30 (los dos `CLLocationManager` vivos a la vez
+mientras el buscador está sobre el mapa), H-31 (una pulsación anterior a que `.task` termine
+de construir `AddressSearchModel` se pierde) y H-32 (el picker anidado de «Elegir en el mapa»
+puede cambiar la hoja externa mientras la interna se está cerrando). Los cuatro son de
+severidad baja o de confianza baja en el informe original; ninguno entraba en las tandas tal y
+como se planificaron, y arreglarlos no estaba en el encargo de implementarlas.
+
+**Lo que se resolvió sin tener su propio hueco en ninguna tanda:** H-12 (el comentario de
+cabecera de `MapSearchSheet` citaba una cifra medida en un Mac como si fuera del dispositivo;
+corregido de camino al reescribir ese mismo comentario en la Tanda D) y H-41 (la rama de
+prefijo numérico sin cubrir; la cubre el mismo test que la Tanda A añadió para H-02/H-03,
+`numericExactAndPrefixTogetherRespectLimitAndLeadingZero`, aunque su nombre no cite el
+número). H-47 (recientes de pin todos con el mismo nombre) era, según el propio informe, una
+consecuencia de H-33 y no un hallazgo aparte — arreglado H-33 en la Tanda B, deja de aplicar.
+
+Cifras finales: **359 tests en `VigoCore`** (321 antes de esta auditoría, +38), **18 en el
+target de app** (16 antes, +2). Ninguna de las cuatro tandas se ha comprobado en dispositivo
+— pendiente del propietario, con la lista concreta de qué probar en cada sección de arriba.

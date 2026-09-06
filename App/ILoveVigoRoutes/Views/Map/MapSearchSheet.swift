@@ -7,9 +7,10 @@ import VigoCore
 /// The one buscador of the app: stops, addresses, saved places, saved journeys and
 /// favourites, plus the current position and a point dropped on the map — all through
 /// `Purpose`, which is the only thing that changes behaviour here. The stop search runs on
-/// every keystroke (0,3 ms against SQLite over 1149 rows, off the main actor) while the
-/// address search waits 300 ms and is fixed to a Vigo box that never carries the user's
-/// position.
+/// every keystroke — sub-millisecond against SQLite at the feed's real size, off the main
+/// actor (H-12: an order of magnitude, not a specific figure, which would only go stale as
+/// the feed grows) — while the address search waits 300 ms and is fixed to a Vigo box that
+/// never carries the user's position.
 ///
 /// A picked result is a place on the map, so `.explore` opens its card — the same card a tap
 /// on the map opens — and the route is one more tap from there. That is the Apple Maps shape.
@@ -203,13 +204,14 @@ struct MapSearchSheet: View {
     }
 
     /// `location.coordinate` moves with every GPS fix; rounding to four decimals (roughly
-    /// 11 m) before using it as a `.task(id:)` is what keeps "Cerca de ti" from reissuing
-    /// its query on jitter alone. The task itself still reads the live coordinate, so the
-    /// query is never stale — only *how often* it reruns is throttled here.
+    /// 11 m, `Coordinate.rounded(toDecimals:)` in `VigoCore` — H-48: the same rounding the
+    /// Fase 12 plan specifies for `recentSearch`'s `dedupKey`, kept in one place so the two
+    /// cannot drift apart) before using it as a `.task(id:)` is what keeps "Cerca de ti" from
+    /// reissuing its query on jitter alone. The task itself still reads the live coordinate,
+    /// so the query is never stale — only *how often* it reruns is throttled here.
     private var roundedCoordinate: Coordinate? {
         location.coordinate.map {
-            Coordinate(latitude: ($0.latitude * 1e4).rounded() / 1e4,
-                      longitude: ($0.longitude * 1e4).rounded() / 1e4)
+            Coordinate(latitude: $0.latitude, longitude: $0.longitude).rounded(toDecimals: 4)
         }
     }
 
@@ -241,10 +243,14 @@ struct MapSearchSheet: View {
                     Button {
                         switch purpose {
                         case .explore:
+                            // The one pick that is not a place: `.explore` plans the whole
+                            // saved journey, origin and destination together, so there is no
+                            // single `MapPlace` for `pick(_:)` to register (H-34's own note
+                            // on why this case, alone, does not go through it).
                             onPickJourney(journey)
                         case .endpoint(let role):
                             let ends = journey.mapEnds
-                            onPick(role == .origin ? ends.origin : ends.destination)
+                            pick(role == .origin ? ends.origin : ends.destination)
                         case .standalone:
                             break
                         }
@@ -477,6 +483,12 @@ struct MapSearchSheet: View {
         }
     }
 
+    /// The one funnel every place this sheet can produce passes through — a stop, an
+    /// address, a saved place, "Mi ubicación", a dropped pin, "Cerca de ti", and (in
+    /// `.endpoint`) one end of a saved journey. `.explore`'s whole-journey pick is the one
+    /// exception, of necessity: planning both ends at once has no single `MapPlace` to hand
+    /// this. The Fase 12 plan (`recentSearch`) depends on this staying true — it is where a
+    /// pick would be registered.
     private func pick(_ place: MapPlace) {
         onPick(place)
     }

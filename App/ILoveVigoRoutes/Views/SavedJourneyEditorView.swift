@@ -99,15 +99,29 @@ struct SavedJourneyEditorView: View {
                         .disabled(!canSave)
                 }
             }
+            // H-36: `MapSearchSheet` directly, not the `EndpointPickerSheet` this used to
+            // open first — that extra sheet only re-listed "Lugares guardados" (already the
+            // first thing `MapSearchSheet` itself offers here) behind one more tap, the exact
+            // duplication Fase 7 existed to remove from the rest of the app.
             .sheet(isPresented: $pickingOrigin) {
-                EndpointPickerSheet(title: "Origen") { input, summary in
-                    originInput = input; originSummary = summary
-                }
+                MapSearchSheet(purpose: .standalone(title: "Origen"),
+                               onPick: { place in
+                                   originInput = place.savedEndpointInput
+                                   originSummary = place.label
+                                   pickingOrigin = false
+                               },
+                               onPickJourney: { _ in },
+                               onCancel: { pickingOrigin = false })
             }
             .sheet(isPresented: $pickingDestination) {
-                EndpointPickerSheet(title: "Destino") { input, summary in
-                    destinationInput = input; destinationSummary = summary
-                }
+                MapSearchSheet(purpose: .standalone(title: "Destino"),
+                               onPick: { place in
+                                   destinationInput = place.savedEndpointInput
+                                   destinationSummary = place.label
+                                   pickingDestination = false
+                               },
+                               onPickJourney: { _ in },
+                               onCancel: { pickingDestination = false })
             }
         }
     }
@@ -138,59 +152,5 @@ struct SavedJourneyEditorView: View {
                 label: labelEdit, origin: originInput, destination: destinationInput))
         }
         dismiss()
-    }
-}
-
-/// Picks one journey endpoint: a saved place (a live link, so a later rename propagates) or
-/// anything `MapSearchSheet` can find, taken as a detached, one-off snapshot.
-private struct EndpointPickerSheet: View {
-    @Environment(AppEnvironment.self) private var environment
-    @Environment(\.dismiss) private var dismiss
-    let title: String
-    let onPick: (SavedEndpointInput, String) -> Void
-
-    @State private var showingPlacePicker = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if !environment.savedPlaces.places.isEmpty {
-                    Section("Lugares guardados") {
-                        ForEach(environment.savedPlaces.places) { place in
-                            Button {
-                                onPick(.savedPlace(place), place.name)
-                                dismiss()
-                            } label: {
-                                Label(place.name, systemImage: place.symbolName)
-                            }
-                        }
-                    }
-                }
-                Section {
-                    Button {
-                        showingPlacePicker = true
-                    } label: {
-                        Label("Elegir otro lugar", systemImage: "mappin.and.ellipse")
-                    }
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancelar") { dismiss() }
-                }
-            }
-        }
-        .sheet(isPresented: $showingPlacePicker) {
-            MapSearchSheet(purpose: .standalone(title: title),
-                           onPick: { place in
-                               onPick(place.savedEndpointInput, place.label)
-                               showingPlacePicker = false
-                               dismiss()
-                           },
-                           onPickJourney: { _ in },
-                           onCancel: { showingPlacePicker = false })
-        }
     }
 }

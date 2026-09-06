@@ -242,9 +242,18 @@ public struct TransitRepository: Sendable {
             // Every term has to appear somewhere, in any order — "hospital povisa" finds
             // "Rúa de Barcelona  Hospital Ribera Povisa" even though the words are neither
             // contiguous nor in that order in the name.
+            // Capped well past `limit` rather than left unbounded: `%a%`-shaped patterns
+            // cannot use an index (no fixed prefix), so a single common letter matches most
+            // of the table, and every row this fetches gets scored and sorted in Swift right
+            // after. Measured against the real feed: an uncapped `searchStops("a")` cost
+            // 7.6 ms, ~13× the sub-millisecond every real query costs — cheap in absolute
+            // terms, but a needless multiple of it for a query nobody types on purpose.
+            // `limit * 4` is generous enough that a real query's contains-tier, which is
+            // already far smaller than this, is never the one that hits the cap.
             let contained = try Stop
                 .filter(sql: "(\(termClause)) AND searchName NOT LIKE ? ESCAPE '\\'",
                         arguments: StatementArguments(termArgs + ["\(pattern)%"]))
+                .limit(limit * 4)
                 .fetchAll(db)
                 .map { ($0, Self.termPrefixScore(terms, in: $0.searchName)) }
                 .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.searchName < $1.0.searchName }

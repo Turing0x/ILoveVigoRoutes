@@ -130,9 +130,22 @@ extension MapPlace {
     /// anchor keeps a fallback coordinate precisely so a reimport cannot strand a saved
     /// journey, and the planner only ever needs a coordinate.
     public static func savedEndpoint(_ endpoint: SavedEndpoint) -> MapPlace {
-        MapPlace(place: endpoint.place,
-                 subtitle: endpoint.anchor.resolvedStop?.name,
-                 origin: endpoint.placeID.map { .savedPlace($0) } ?? .address)
+        // H-38: falling back to `.address` regardless of the anchor mislabelled a
+        // stop-anchored, non-live-linked endpoint as an address — wrong symbol
+        // (`mappin.and.ellipse` instead of `bus.fill`), and `MapPlace.stop` returning `nil`
+        // silently dropped "Ver llegadas", the favourite star, and the `stopID` a later
+        // `savedEndpointInput` would have kept. The anchor, not the live link, says what
+        // this actually is; `.placeID` only ever adds *which* saved place it also happens
+        // to track.
+        let origin: MapPlace.Origin
+        if let placeID = endpoint.placeID {
+            origin = .savedPlace(placeID)
+        } else if let stop = endpoint.anchor.resolvedStop {
+            origin = .stop(stop)
+        } else {
+            origin = .droppedPin
+        }
+        return MapPlace(place: endpoint.place, subtitle: endpoint.anchor.resolvedStop?.name, origin: origin)
     }
 }
 

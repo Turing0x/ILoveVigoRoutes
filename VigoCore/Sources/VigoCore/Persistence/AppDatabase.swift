@@ -46,6 +46,15 @@ public final class AppDatabase: Sendable {
                 t.column("longitude", .double).notNull()
                 t.column("wheelchairBoarding", .integer)
             }
+            // BINARY collation, not NOCASE: SQLite can only turn `LIKE 'x%'` into an index
+            // *search* over a NOCASE-collated column, so every `searchStops` query still
+            // *scans* this index rather than seeking into it (checked with
+            // `EXPLAIN QUERY PLAN` against the real feed — H-07). Left this way on purpose:
+            // measured against that same feed, every query costs comfortably under a
+            // millisecond regardless (worst case ~2 ms, a single common letter's `LIKE
+            // '%a%'` tier, which no index — NOCASE or not — could speed up, since a leading
+            // wildcard can never use one). A collation migration would only help the
+            // already-cheap prefix tier, so it stays a documentation note rather than a `v4`.
             try db.create(index: "stop_searchName", on: "stop", columns: ["searchName"])
             try db.create(index: "stop_vitrasaCode", on: "stop", columns: ["vitrasaCode"])
             // Bounding-box prefilter for the nearby screen.

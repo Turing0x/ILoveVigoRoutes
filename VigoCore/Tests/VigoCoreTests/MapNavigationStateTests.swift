@@ -371,7 +371,10 @@ struct SavedJourneyOnMapTests {
     @Test("Un extremo suelto, sin lugar guardado detrás, no finge estarlo")
     func adHocEndpointIsNotLinked() {
         let place = MapPlace.savedEndpoint(endpoint(name: "Otro sitio", anchor: .coordinate(here)))
-        #expect(place.origin == .address)
+        // `.droppedPin`, no `.address` (H-38 corrigió el `.address` fijo de antes): no hay
+        // forma de saber si esta coordenada vino de una dirección o de un pin, y `.droppedPin`
+        // no finge saberlo más de lo que ya fingía `.address`.
+        #expect(place.origin == .droppedPin)
         #expect(place.stop == nil)
     }
 

@@ -772,8 +772,20 @@ pequeña.
   ya está siempre en la cabecera del buscador.
 - **`.savedPlace`.** Ya tiene su propia sección permanente. Duplicarlo es ruido.
 
-Todo lo demás se guarda: `.stop`, `.address`, `.pointOfInterest`, `.droppedPin`. Un punto suelto
-del mapa **sí** se guarda: volver a él es justo lo que cuesta trabajo sin recientes.
+Todo lo demás se guarda: `.stop`, `.address`, `.droppedPin`. Un punto suelto del mapa **sí** se
+guarda: volver a él es justo lo que cuesta trabajo sin recientes.
+
+**Corrección (H-46, auditoría del buscador, `AUDITORIA-BUSCADOR.md`): `.pointOfInterest` no
+pertenece a esta lista.** Ese origen solo lo produce `MapScreenModel.selectPointOfInterest`, al
+tocar un POI de Apple **directamente en el mapa** — nunca pasa por `MapSearchSheet` ni por
+`pick(_:)`, así que no hay ningún sitio donde esta fase lo pudiera interceptar tal y como está
+descrita. Antes de implementar, decidir una de dos: (a) dejar los POI fuera de «Recientes»,
+igual que `.currentLocation`, con la misma razón de fondo — no es una búsqueda; o (b) si se
+quieren dentro (un POI es tan "un sitio al que costó volver" como un pin suelto), el punto de
+registro no puede ser `pick(_:)` — tendría que ser `MapNavigationState.select`, que es el embudo
+real de todo lo que acaba en una ficha del mapa, tocado desde el buscador o no. Elegir (b)
+cambia además el «Cambios por fichero» de más abajo: el registro ya no viviría solo en
+`MapSearchSheet.swift`.
 
 ## 12.2 Deduplicación, expulsión e interacción con lo ya guardado
 
@@ -848,9 +860,32 @@ Sin clave foránea a `stop`, por lo de siempre.
 | `App/AppEnvironment.swift` | Expone `recents` y lo recarga en `refreshFeed()` junto a `favourites` y `savedPlaces` — un reimport puede haber dejado huérfanos |
 | `App/Views/Map/MapSearchSheet.swift` | `pick(_:)` registra el reciente (salvo `.currentLocation` y `.savedPlace`). Sección «Recientes» la primera del estado vacío, con swipe para borrar una y un «Borrar recientes» al final |
 
-**El registro va en `pick(_:)` y no en cada fila.** Hay seis sitios que llaman a `pick` (parada,
-dirección, POI, pin, cercana, favorita) y el buscador ya sufrió una vez el problema de tener la
-misma lógica en dos sitios — la Fase 7 existe por eso. Un solo embudo.
+**El registro va en `pick(_:)` y no en cada fila.** El buscador ya sufrió una vez el problema de
+tener la misma lógica en dos sitios — la Fase 7 existe por eso — así que un solo embudo, no una
+llamada a `recordRecentSearch` copiada en cada fila.
+
+**Corrección (H-46): la enumeración de «seis sitios (parada, dirección, POI, pin, cercana,
+favorita)» no se corresponde con el código de hoy.** Comprobado contra
+`App/ILoveVigoRoutes/Views/Map/MapSearchSheet.swift` tal y como queda tras la auditoría del
+buscador:
+
+- «POI» no pertenece a esta lista — ver la corrección de §12.1.
+- «Parada» y «favorita» son la **misma** llamada: `stopRow(_:)` sirve tanto la sección
+  «Paradas» de los resultados como «Paradas favoritas» del estado vacío. No son dos sitios,
+  son una función usada en dos secciones.
+- Falta «lugar guardado»: la fila de `environment.savedPlaces.places` en el estado vacío
+  también llama a `pick(_:)` (`pick(.savedPlace(place))`), y no estaba en la lista original.
+- Desde la corrección de H-34 en la misma auditoría, el extremo de un **trayecto guardado**
+  elegido con `purpose == .endpoint(role)` también pasa por `pick(_:)` — antes se saltaba el
+  embudo llamando a `onPick` directamente. `purpose == .explore` sigue sin pasar por aquí, y
+  no debe: planifica el trayecto entero con `onPickJourney`, no hay un único `MapPlace` que
+  registrar.
+
+En total, a fecha de esta corrección: `pickCurrentLocation()`, el cierre de
+`MapPointPickerView` (parada, dirección, favorita comparten `stopRow(_:)`), `nearbyRow(_:)`,
+`addressRow(_:_:)`, la fila de lugar guardado, y el extremo de trayecto guardado en
+`.endpoint`. Volver a comprobar contra el código en el momento de implementar esta fase: es
+exactamente el tipo de lista que se desactualiza con el primer cambio que la toque de pasada.
 
 ## 12.5 Pruebas y mutaciones
 
