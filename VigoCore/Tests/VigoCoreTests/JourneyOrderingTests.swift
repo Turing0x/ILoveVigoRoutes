@@ -155,13 +155,38 @@ struct JourneyOrderingTests {
         #expect(Set(front) == Set([x, y]))
     }
 
-    @Test("Un trayecto peor en los cuatro ejes sí se descarta")
+    /// Mismo embarque en los dos (y por tanto misma salida de casa, con el mismo acceso a
+    /// pie): así ninguno de los dos ejes nuevos entra en juego, y solo cuentan los tres que
+    /// de verdad difieren.
+    @Test("Un trayecto peor en los cinco ejes sí se descarta")
     func strictlyWorseIsDropped() throws {
         let bueno = journey(access: 120, board: 5, arrive: 30, egress: 120, line: "OK")
-        let malo = journey(access: 120, board: 2, arrive: 45, egress: 900, transfers: 1, line: "NO")
+        let malo = journey(access: 120, board: 5, arrive: 45, egress: 900, transfers: 1, line: "NO")
 
         let front = JourneyShortlist.undominated([bueno, malo])
         #expect(front == [bueno])
+    }
+
+    /// H-05: `departure` (salir de casa más tarde gana) y el embarque (subir antes gana) no
+    /// son el mismo eje, y pueden discrepar en cualquier dirección según cuánto ande cada uno
+    /// para llegar a su parada. A embarca más tarde pero sale de casa después (camina poco);
+    /// B embarca antes pero sale de casa antes (camina mucho). Sin el eje de embarque, A
+    /// dominaba a B en los cuatro ejes de siempre y B —la respuesta bajo «sale antes»—
+    /// desaparecía antes de que ese criterio pudiera elegirlo.
+    @Test("Con el eje de embarque, el primer autobús sobrevive al filtro de dominadas")
+    func boardingAxisKeepsTheFirstBus() throws {
+        let a = journey(access: 60, board: 10, arrive: 40, egress: 120, line: "A")
+        let b = journey(access: 900, board: 8, arrive: 40, egress: 120, line: "B")
+        #expect(b.departure < a.departure, "B sale de casa antes: su caminata de acceso es larga")
+        #expect(JourneyOrdering.firstBoarding(b)! < JourneyOrdering.firstBoarding(a)!,
+                "pero B embarca antes: es el bus que 'sale antes' busca")
+
+        let front = JourneyShortlist.undominated([a, b])
+        #expect(front.count == 2, "ninguno domina al otro: A sale de casa más tarde, B embarca antes")
+        #expect(Set(front) == Set([a, b]))
+
+        let order = JourneyOrdering.earliestBoarding.apply(front, limit: 2)
+        #expect(order == [b, a])
     }
 
     /// El sesgo por la puerta de atrás: cortar por llegada deja el conjunto elegido por

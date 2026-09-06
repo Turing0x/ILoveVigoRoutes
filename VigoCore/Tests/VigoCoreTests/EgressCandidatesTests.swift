@@ -62,6 +62,63 @@ struct EgressCandidatesTests {
         #expect(from == .stop(n.timetable.stops[n.c]), "baja en C, la parada de al lado del destino")
     }
 
+    /// L1: S0 → S1 (lejos del portal, 900 s a pie), llega 09:10. L2: S1 → S2 (al lado del
+    /// portal, 30 s a pie), llega 09:30 — un segundo vehículo, tomado en el mismo S1 sin
+    /// caminar. L2 solo existe para que llegar a S2 cueste una **segunda** ronda, mientras S1
+    /// ya es alcanzable en la primera: `targetBest`, apretado tras la ronda 1 con los 900 s de
+    /// S1, bloqueaba la llegada —mucho más tardía— de S2 aunque su propia caminata sea mínima
+    /// (H-03: podar con la caminata de un candidato distinto, que «menos caminata» no conoce).
+    private func farThenCloseTimetable() -> (timetable: Timetable, s0: Int, s1: Int, s2: Int) {
+        let stops = [
+            PlannerFixture.stop("FC0", name: "S0"), PlannerFixture.stop("FC1", eastMetres: 2_000, name: "S1"),
+            PlannerFixture.stop("FC2", eastMetres: 2_600, name: "S2"),
+        ]
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 2, 4], patternStops: [0, 1, 1, 2],
+            patternTripsOffset: [0, 1, 2],
+            tripRefs: [
+                TripRef(tripID: TripID("L1#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+                TripRef(tripID: TripID("L2#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0, 2],
+            tripArrival: [at(9, 0), at(9, 10), at(9, 20), at(9, 30)],
+            tripDeparture: [at(9, 0), at(9, 10), at(9, 20), at(9, 30)],
+            patternRouteID: [RouteID("RL1"), RouteID("RL2")], patternRouteShortName: ["L1", "L2"],
+            stopPatternsOffset: [0, 1, 3, 4],
+            stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 0, 1],
+            footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2)
+    }
+
+    /// H-03: sin esta corrección, `result.arrival(round: 2, stop: s2)` es `nil` y
+    /// `egressCandidates` solo devuelve la parada de 900 s — la única alternativa ofrecida
+    /// hace andar quince minutos aunque la de 30 s sea perfectamente alcanzable.
+    @Test("Una parada alcanzable en una ronda posterior no se pierde por la poda del objetivo")
+    func laterRoundIsNotPrunedByAnEarlierCandidatesWalk() throws {
+        let n = farThenCloseTimetable()
+        let query = RaptorQuery(access: [StopWalk(stop: Int32(n.s0), seconds: 0)],
+                                egress: [StopWalk(stop: Int32(n.s1), seconds: 900),
+                                         StopWalk(stop: Int32(n.s2), seconds: 30)],
+                                departure: at(9, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine().run(n.timetable, query)
+
+        #expect(result.roundsRun == 2)
+        #expect(result.arrival(round: 2, stop: n.s2) == at(9, 30))
+
+        let candidates = JourneyReconstruction.egressCandidates(
+            upTo: result.roundsRun, result: result, query: query, limit: 3)
+        #expect(candidates.count == 2, "la parada de 900 s y la de 30 s, ninguna descartada")
+        #expect(Set(candidates.map(\.stop)) == Set([n.s1, n.s2]))
+    }
+
     /// Una parada que llega más tarde **y** deja más lejos no compra nada, y el frente no está
     /// para llenarse de basura: cada sitio que ocupa se lo quita a un candidato bueno.
     @Test("Una parada peor en los dos ejes no entra en el frente")
@@ -138,5 +195,66 @@ struct EgressCandidatesTests {
             #expect(journey.legs.contains { if case .ride = $0 { true } else { false } },
                     "un trayecto reconstruido siempre lleva al menos un autobús")
         }
+    }
+
+    /// Una línea de doce paradas, cada una 120 s después que la anterior y cada una un poco
+    /// más cerca del destino: las doce se compran unas a otras (llegada creciente, caminata
+    /// decreciente) y ninguna domina a otra, así que el frente entero tiene doce candidatos.
+    private func longLineTimetable(stops count: Int) -> (timetable: Timetable, egressStops: [Int]) {
+        var stops: [Stop] = [PlannerFixture.stop("LL0", name: "Origen")]
+        for index in 1...count {
+            stops.append(PlannerFixture.stop("LL\(index)", eastMetres: Double(index) * 300, name: "P\(index)"))
+        }
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let times: [Int32] = (0...count).map { at(9, 0) + Int32($0) * 120 }
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, Int32(count + 1)], patternStops: (0...count).map(Int32.init),
+            patternTripsOffset: [0, 1],
+            tripRefs: [TripRef(tripID: TripID("L1#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                               dayOffsetSeconds: 0, headsign: nil)],
+            patternTimesOffset: [0],
+            tripArrival: times, tripDeparture: times,
+            patternRouteID: [RouteID("RL1")], patternRouteShortName: ["L1"],
+            stopPatternsOffset: (0...(count + 1)).map(Int32.init),
+            stopPatternPattern: Array(repeating: Int32(0), count: count + 1),
+            stopPatternPosition: (0...count).map(Int32.init),
+            footpathOffset: Array(repeating: Int32(0), count: count + 2),
+            footpathTarget: [], footpathSeconds: [],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, Array(1...count))
+    }
+
+    /// H-04: `alternatives` terminaba con `.sorted { $0.arrival < $1.arrival }.prefix(maxCandidates)`
+    /// — el mismo sesgo por llegada que la Fase 10 existe para quitar, solo que un nivel más
+    /// abajo. Con doce candidatos y `maxCandidates = 8`, ese `prefix` se queda con las ocho
+    /// paradas que antes llegan y tira las cuatro que menos andan — exactamente las que
+    /// `egressCandidates` se ha esforzado en generar.
+    @Test("El corte de alternatives conserva el óptimo de caminata, no solo los primeros por llegada")
+    func alternativesCutDoesNotFavourArrival() throws {
+        let n = longLineTimetable(stops: 12)
+        let options = PlannerOptions(maxEgressCandidates: 12)
+        // La parada 1 anda 1200 s, la 12 anda 100 s: decreciente al revés de la llegada.
+        let egress = n.egressStops.map { StopWalk(stop: Int32($0), seconds: Int32((13 - $0) * 100)) }
+        let query = RaptorQuery(access: [StopWalk(stop: 0, seconds: 0)],
+                                egress: egress, departure: at(9, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine(options: options).run(n.timetable, query)
+
+        let front = JourneyReconstruction.egressCandidates(
+            upTo: result.roundsRun, result: result, query: query, limit: options.maxEgressCandidates)
+        try #require(front.count == 12, "las doce se compran unas a otras: nada domina a nada")
+
+        var cutOptions = options
+        cutOptions.maxCandidates = 8
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: n.timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: cutOptions)
+
+        #expect(journeys.count == 8)
+        #expect(journeys.map(JourneyOrdering.egressWalkSeconds).min() == 100,
+                "la parada que menos anda tiene que sobrevivir al corte; un prefix por llegada la habría tirado")
     }
 }

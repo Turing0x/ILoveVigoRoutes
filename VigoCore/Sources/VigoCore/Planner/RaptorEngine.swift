@@ -108,9 +108,20 @@ public struct RaptorEngine: Sendable {
         // arrival label because a transfer costs slack that riding on does not.
         var ready = [Int32](repeating: unreached, count: (rounds + 1) * stopCount)
 
-        // The horizon is the initial pruning bound, which makes an impossible query cheap
+        // The horizon is the only pruning bound, which makes an impossible query cheap
         // instead of making it scan the whole network four times.
-        var targetBest = query.departure &+ query.horizon
+        //
+        // It is deliberately *not* tightened further with the best door-to-door arrival
+        // found so far (as it was before Fase 10's audit found H-03). That tightening is
+        // only sound for a single scalar objective: it says "arriving this late cannot beat
+        // the best full answer already found", which is true for earliest-arrival but false
+        // once a shorter final walk is also a winning criterion — a stop reached later can
+        // still be the "least walking" answer, and comparing its network arrival against a
+        // bound baked from a *different* egress stop's own walk has no sound formula that
+        // does not sometimes throw that candidate away before it is ever produced. See
+        // `AUDITORIA-RAPTOR.md` H-03 for the instance that exposed it and why a same-shaped
+        // fix belongs in `BruteForceReference`, which shares this rule on purpose.
+        let targetBest = query.departure &+ query.horizon
 
         // MARK: Round 0 — walking into the network
         //
@@ -127,7 +138,6 @@ public struct RaptorEngine: Sendable {
             parent[stop] = .access(seconds: entry.seconds)
             marked[stop] = true
         }
-        targetBest = min(targetBest, bestEgress(timetable, query, bestArrival))
 
         var roundsRun = 0
 
@@ -242,10 +252,7 @@ public struct RaptorEngine: Sendable {
                 }
             }
 
-            // MARK: 5 — tighten the bound with the best way out found so far
-            targetBest = min(targetBest, bestEgress(timetable, query, bestArrival))
-
-            // MARK: 6
+            // MARK: 5
             if !marked.contains(true) { break }
             roundsRun = round
         }
@@ -253,21 +260,6 @@ public struct RaptorEngine: Sendable {
         return RaptorResult(stopCount: stopCount, roundsRun: roundsRun,
                             arrival: arrival, parent: parent, bestArrival: bestArrival,
                             rideParent: rideParent)
-    }
-
-    /// The earliest the destination can be reached from anything found so far. Every label
-    /// later than this is useless: arrivals only grow along a journey, so such a label can
-    /// never lead to a better answer, and a journey that arrives no earlier while using
-    /// more vehicles is dominated.
-    private func bestEgress(_ timetable: Timetable, _ query: RaptorQuery,
-                            _ bestArrival: [Int32]) -> Int32 {
-        var best = Int32.max
-        for exit in query.egress {
-            let reached = bestArrival[Int(exit.stop)]
-            guard reached != RaptorResult.unreached else { continue }
-            best = min(best, reached &+ exit.seconds)
-        }
-        return best
     }
 
     /// First trip of `pattern` departing `position` at or after `notBefore`, searched in

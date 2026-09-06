@@ -22,7 +22,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
-| **Auditoría del motor RAPTOR** | 🟡 Tanda 1 hecha (las horas que se enseñan eran falsas). 2–4 en `AUDITORIA-RAPTOR.md` |
+| **Auditoría del motor RAPTOR** | 🟡 Tandas 1–2 hechas (horas falsas; el criterio por defecto elegía de un conjunto incompleto). 3–4 en `AUDITORIA-RAPTOR.md` |
 
 ---
 
@@ -1988,3 +1988,77 @@ Contra el feed real (`VIGO_GTFS_ZIP`): la suite de integración y de tiempos pas
 **Pendiente de esta auditoría:** Tandas 2 (H-03/H-04/H-05, el criterio por defecto elige de
 un conjunto que no lo contiene), 3 (H-07/H-08/H-09, cerrar los huecos de mutación) y 4
 (H-10 a H-19, deuda y precisión) — todas en `AUDITORIA-RAPTOR.md` §8.
+
+## Auditoría del motor RAPTOR — Tanda 2: el criterio por defecto elegía de un conjunto incompleto
+
+Segunda tanda de `AUDITORIA-RAPTOR.md`. Corrige H-03, H-04 y H-05 — los tres hallazgos de
+optimalidad: la lista de alternativas que le llega al usuario puede no contener la respuesta
+correcta bajo «Menos caminata» o «Sale antes», sin que nada se vea roto (ni un `crash`, ni un
+trayecto imposible) porque el fallo es que la buena **no llega a estar en la lista**.
+
+**H-03 — la poda por objetivo mataba al candidato de menos caminata.** `RaptorEngine` apretaba
+`targetBest` al final de cada ronda con la mejor llegada **puerta a puerta** encontrada hasta
+ahí, y en la ronda siguiente descartaba toda etiqueta que llegara igual o más tarde. Correcto
+mientras la única figura de mérito era la llegada; con la caminata final como criterio, una
+parada que llega más tarde pero deja mucho más cerca queda podada antes de que
+`egressCandidates` pueda rescatarla — no se filtra después, no llega a **existir**.
+
+**Desviación del informe, señalada por necesidad.** `AUDITORIA-RAPTOR.md` proponía aflojar la
+cota a `min(bestArrival[salida])`, sin sumar la caminata de cada salida. Al implementarlo, esa
+fórmula seguía podando la instancia mínima del propio informe: sigue mezclando la llegada de
+**una** parada de salida con la de **otra**, y esas dos cantidades no son comparables entre sí
+en cuanto sus caminatas difieren — el mismo problema de fondo, con un número distinto. La
+única cota que no descarta nunca al candidato de menos caminata es no apretar `targetBest`
+con nada derivado de las salidas en absoluto, dejándolo fijo en el horizonte de búsqueda desde
+el principio. Es más barata que la alternativa de dos dimensiones que el informe descartaba
+por cara, y sigue podando lo único que de verdad hace falta: una consulta sin ninguna salida
+alcanzable. Coste medido: 130 → 195 ms en frío contra el feed real, dentro del presupuesto de
+1 s con margen de sobra. `BruteForceReference` comparte la misma corrección — comparte la
+regla a propósito, así que dejarla con la poda vieja habría hecho que el contraste
+aleatorizado fallara por un desacuerdo que no es un fallo del motor.
+
+**H-04 — `alternatives` recortaba por llegada antes de que existiera el criterio.** El último
+gesto de `JourneyReconstruction.alternatives` era `sorted { $0.arrival < $1.arrival
+}.prefix(maxCandidates)` — el mismo sesgo que la Fase 10 existe para quitar, reintroducido un
+nivel más abajo. Sustituido por `JourneyShortlist.cut`, que ya reparte por turnos entre los
+tres criterios y ya tenía su propia suite. Con doce candidatos de una sola línea (llegada
+creciente, caminata decreciente) y `maxCandidates = 8`, el `prefix` viejo se quedaba con las
+ocho que antes llegan y tiraba las cuatro que menos andan; `cut` conserva la de menos caminata
+siempre.
+
+**H-05 — el eje `departure` de la dominancia no es el embarque de «Sale antes».**
+`JourneyShortlist.undominated` usaba `Journey.departure` («cuándo hay que salir de casa») como
+eje, mientras `JourneyOrdering.earliestBoarding` usa el instante del primer autobús — dos
+cosas distintas en cuanto la caminata de acceso difiere entre alternativas, y pueden discrepar
+en cualquier dirección. Sin su propio eje, `undominated` podía borrar el trayecto que coge el
+primer autobús —la respuesta bajo «Sale antes»— antes de que ese criterio llegara a elegir.
+Añadido un quinto eje (embarque, antes mejor) a la dominancia, con la recomendación del propio
+informe: mantener los cinco en vez de sacar `departure`, porque la caminata total ya demostró
+que un eje más se puede pagar con `cut`.
+
+**Un test existente se rompió, y era lo esperado (mismo patrón que la Fase 10, R2).**
+`strictlyWorseIsDropped` comparaba dos trayectos con embarques distintos; con el quinto eje,
+ya no era «peor en los cuatro ejes de siempre», sino mejor en uno nuevo que la Fase 10 no
+conocía. Ajustado para que los dos empaten en embarque (y por tanto en salida, con el mismo
+acceso a pie) y difieran solo en lo que el test quiere probar.
+
+**Verificado por mutación, las tres correcciones.** Revertir la cota de `targetBest` a la de
+antes tumba el test de H-03 con los valores exactos previstos (ronda 2 podada, un solo
+candidato en vez de dos). Volver al `prefix` por llegada en `alternatives` tumba el test de
+doce candidatos (la mejor caminata pasa de 100 s a 500 s). Quitar el eje de embarque de
+`undominated` tumba el test nuevo de H-05 con el mismo patrón que ya cazaba el caso de la
+caminata en la Fase 10.
+
+**El contraste aleatorizado se repitió a la escala completa de la auditoría** —20.000
+instancias, 40 semillas, con el generador ampliado que `AUDITORIA-RAPTOR.md` describe— contra
+el motor y la referencia ya corregidos: **0 discrepancias** donde la precondición de no
+adelantamiento se cumple, igual que antes de esta tanda.
+
+**Verificación.** Suite de `VigoCore`: **366 tests en verde** (363 antes de esta tanda, +3:
+`boardingAxisKeepsTheFirstBus`, `laterRoundIsNotPrunedByAnEarlierCandidatesWalk`,
+`alternativesCutDoesNotFavourArrival`). Contra el feed real: suite de integración y de
+tiempos verde, planificación en frío en 195 ms. `xcodebuild` Debug y Release compilan contra
+`generic/platform=iOS`.
+
+**Pendiente de esta auditoría:** Tandas 3 (H-07/H-08/H-09, cerrar los huecos de mutación) y 4
+(H-10 a H-19, deuda y precisión) — en `AUDITORIA-RAPTOR.md` §8.

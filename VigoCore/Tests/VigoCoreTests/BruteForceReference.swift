@@ -38,7 +38,11 @@ enum BruteForceReference {
         var bestArrival = [Int32](repeating: unreached, count: stopCount)
         var ready = [Int32](repeating: unreached, count: (rounds + 1) * stopCount)
 
-        var targetBest = query.departure &+ query.horizon
+        // No tightening against `bestEgress` here — see `RaptorEngine.run` (H-03): sound
+        // only for a single scalar objective, and this reference has to share the corrected
+        // rule or a contrast against the fixed engine would show mismatches that are not
+        // engine bugs at all.
+        let targetBest = query.departure &+ query.horizon
 
         for entry in query.access {
             let stop = Int(entry.stop)
@@ -48,7 +52,6 @@ enum BruteForceReference {
             ready[stop] = time
             bestArrival[stop] = time
         }
-        targetBest = min(targetBest, bestEgress(timetable, query, bestArrival))
 
         var roundsRun = 0
 
@@ -107,24 +110,12 @@ enum BruteForceReference {
                 }
             }
 
-            targetBest = min(targetBest, bestEgress(timetable, query, bestArrival))
             guard anyMarked else { break }
             roundsRun = round
         }
 
         return BruteForceResult(stopCount: stopCount, roundsRun: roundsRun,
                                 arrival: arrival, bestArrival: bestArrival)
-    }
-
-    private static func bestEgress(_ timetable: Timetable, _ query: RaptorQuery,
-                                   _ bestArrival: [Int32]) -> Int32 {
-        var best = Int32.max
-        for exit in query.egress {
-            let reached = bestArrival[Int(exit.stop)]
-            guard reached != RaptorResult.unreached else { continue }
-            best = min(best, reached &+ exit.seconds)
-        }
-        return best
     }
 }
 

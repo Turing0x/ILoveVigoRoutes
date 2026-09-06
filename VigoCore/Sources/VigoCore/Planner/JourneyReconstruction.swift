@@ -73,10 +73,12 @@ public enum JourneyReconstruction {
         }
 
         // Cut by `maxCandidates` and not by `maxAlternatives`: this is the pool the user's
-        // ordering preference chooses from, not the list they see.
-        return Array((kept + closerOnFoot)
-            .sorted { $0.arrival < $1.arrival }
-            .prefix(options.maxCandidates))
+        // ordering preference chooses from, not the list they see. `JourneyShortlist.cut`,
+        // not a plain sort-by-arrival-then-prefix (H-04): the latter is the same bias by
+        // arrival Fase 10 exists to remove, just moved one call earlier — `closerOnFoot`
+        // candidates are by construction never the earliest to arrive, so a prefix-by-arrival
+        // drops exactly the ones this whole mechanism exists to produce.
+        return JourneyShortlist.cut(kept + closerOnFoot, to: options.maxCandidates)
     }
 
     /// Identity of a way out, for deduplication across rounds: the same stop reached with the
