@@ -23,7 +23,12 @@ public struct TimetableBuilder: Sendable {
     }
 
     /// A trip as read from the database, before it is grouped into a pattern.
-    private struct RawTrip {
+    ///
+    /// Not `private`: `nonOvertakingGroups`/`overtakes` are pure functions of this type and
+    /// nothing else, so `TimetableBuilderTests` can hand them hand-built values directly —
+    /// the same reason `JourneyReconstruction.egressCandidates` is `internal` rather than
+    /// `private`.
+    struct RawTrip {
         let ref: TripRef
         let routeID: RouteID
         let stops: [Int32]
@@ -114,7 +119,7 @@ public struct TimetableBuilder: Sendable {
                 return raws[a].ref.tripID.rawValue < raws[b].ref.tripID.rawValue
             }
 
-            for group in nonOvertakingGroups(members, in: raws) {
+            for group in Self.nonOvertakingGroups(members, in: raws) {
                 patternStops.append(contentsOf: key.stops)
                 patternStopsOffset.append(Int32(patternStops.count))
                 patternTimesOffset.append(Int32(tripArrival.count))
@@ -281,7 +286,12 @@ public struct TimetableBuilder: Sendable {
     /// `members` must already be sorted by departure at the first stop. Comparing a
     /// candidate against the last trip of a group is enough: the group is built in
     /// non-decreasing order, so dominating its last member dominates all of them.
-    private func nonOvertakingGroups(_ members: [Int], in raws: [RawTrip]) -> [[Int]] {
+    ///
+    /// `static`, not an instance method: neither this nor `overtakes` touches `self`, and
+    /// `internal` (not `private`) is what lets `TimetableBuilderTests` call it directly with
+    /// hand-built `RawTrip` values instead of only ever exercising it through a full GTFS
+    /// import — the same reasoning as `RawTrip`'s own visibility, just above.
+    static func nonOvertakingGroups(_ members: [Int], in raws: [RawTrip]) -> [[Int]] {
         var groups: [[Int]] = []
         for member in members {
             var placed = false
@@ -295,7 +305,7 @@ public struct TimetableBuilder: Sendable {
         return groups
     }
 
-    private func overtakes(_ candidate: RawTrip, _ reference: RawTrip) -> Bool {
+    static func overtakes(_ candidate: RawTrip, _ reference: RawTrip) -> Bool {
         for position in candidate.stops.indices {
             if candidate.arrivals[position] < reference.arrivals[position] { return true }
             if candidate.departures[position] < reference.departures[position] { return true }

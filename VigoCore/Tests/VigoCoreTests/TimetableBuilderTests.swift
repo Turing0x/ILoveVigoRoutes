@@ -2,6 +2,68 @@ import Testing
 import Foundation
 @testable import VigoCore
 
+/// A single trip on 2026-10-26 at 00:05, the day Madrid's clocks go back — the night from
+/// 2026-10-25 to 2026-10-26 is 25 hours, not 24. Built as its own tiny feed rather than
+/// reusing `PlannerFixture`'s network, whose calendar only covers a September week nowhere
+/// near either clock change.
+private enum DSTFixture {
+    static let stops = """
+    stop_id,stop_code,stop_name,stop_lat,stop_lon,wheelchair_boarding
+    DST1,PDST1,Antes do cambio,42.2209973130163,-8.73283517659561,0
+    DST2,PDST2,Despois do cambio,42.2358735452815,-8.72008331665535,0
+    """
+
+    static let routes = """
+    route_id,agency_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+    R1,1,D1,CAMBIO DE HORA,3,000000,000000
+    """
+
+    static let trips = """
+    route_id,service_id,trip_id,trip_headsign,direction_id,block_id,shape_id
+    R1,DST,T_TOMORROW,Despois do cambio,0,B1,
+    """
+
+    /// Belongs to 2026-10-26's service day, well before midnight-plus-24h on any reading —
+    /// this is not a past-midnight trip, it tests the *day offset*, not the axis fold.
+    static let stopTimes = """
+    trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+    T_TOMORROW,00:05:00,00:05:00,DST1,1,0,0
+    T_TOMORROW,00:15:00,00:15:00,DST2,2,0,0
+    """
+
+    static let calendar = """
+    service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date
+    """
+
+    static let calendarDates = """
+    service_id,date,exception_type
+    DST,20261024,1
+    DST,20261025,1
+    DST,20261026,1
+    """
+
+    static var provider: GTFSInMemory {
+        GTFSInMemory(texts: [
+            "agency.txt": Fixture.agency,
+            "stops.txt": stops,
+            "routes.txt": routes,
+            "trips.txt": trips,
+            "stop_times.txt": stopTimes,
+            "calendar.txt": calendar,
+            "calendar_dates.txt": calendarDates,
+            "shapes.txt": "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled",
+        ])
+    }
+
+    static func timetable(anchor: ServiceDate) throws -> Timetable {
+        let db = try AppDatabase.inMemory()
+        let parsed = try GTFSParser().parse(from: provider)
+        _ = try GTFSImporter(database: db).import(feed: parsed.feed, parseWarnings: parsed.warnings)
+        let repository = TransitRepository(database: db)
+        return try TimetableBuilder(repository: repository).build(anchor: anchor)
+    }
+}
+
 @Suite("Timetable construction")
 struct TimetableBuilderTests {
 
@@ -68,6 +130,27 @@ struct TimetableBuilderTests {
             == Fixture.date(2026, 9, 5, 8, 0))
     }
 
+    // MARK: - The clocks change
+
+    /// H-08: the day offset is the real gap between midnights (`ESTADO.md`, paso 2/11 de la
+    /// Fase 3), not a fixed 86 400 — this is the one weekend a year where that distinction
+    /// is observable in the other direction from `pastMidnightTrip`. The night from
+    /// 2026-10-25 to 2026-10-26 is 25 hours in Madrid; a fixed offset would place a trip
+    /// meant for 00:05 the next day an hour early.
+    @Test("A trip on the day after the clocks go back lands at its real wall-clock time")
+    func dstOffsetIsTheRealGap() throws {
+        let timetable = try DSTFixture.timetable(anchor: ServiceDate(yyyymmdd: 20_261_025))
+        let pattern = try #require((0..<timetable.patternCount)
+            .first { timetable.patternRouteShortName[$0] == "D1" })
+        let trip = try #require((0..<timetable.tripCount(ofPattern: pattern))
+            .first { timetable.tripRef(pattern: pattern, trip: $0).serviceDate
+                == ServiceDate(yyyymmdd: 20_261_026) })
+
+        let departure = Int(timetable.departure(pattern: pattern, trip: trip, position: 0))
+        #expect(timetable.date(forAxisSeconds: departure) == Fixture.date(2026, 10, 26, 0, 5),
+                "the real 25-hour night, not a naive +86400")
+    }
+
     // MARK: - Patterns
 
     @Test("Groups trips that share a route and a stop sequence")
@@ -128,6 +211,33 @@ struct TimetableBuilderTests {
                 }
             }
         }
+    }
+
+    /// H-09: every fixture in this suite has `arrival == departure` at each position — the
+    /// real feed does too, 0 dwell in all 137 456 rows of it — so the `departures` clause of
+    /// `overtakes` has never been exercised by anything above. Removing it changes nothing
+    /// any existing test can see. A dwell is what makes the two clauses diverge: X dwells
+    /// 300 s at the middle stop; Y does not, and its own arrivals never beat X's anywhere —
+    /// only its *departure* right after that middle stop does, because it does not wait.
+    @Test("A trip that dwells is overtaken by one that does not, even with no earlier arrival")
+    func overtakesCatchesADepartureOnly() throws {
+        func raw(_ id: String, arrivals: [Int32], departures: [Int32]) -> TimetableBuilder.RawTrip {
+            TimetableBuilder.RawTrip(
+                ref: TripRef(tripID: TripID(id), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                            dayOffsetSeconds: 0, headsign: nil),
+                routeID: RouteID("R"), stops: [0, 1, 2], arrivals: arrivals, departures: departures)
+        }
+        // X dwells 300 s at the middle stop (arrival 200, departure 500).
+        let x = raw("X", arrivals: [100, 200, 700], departures: [100, 500, 700])
+        // Y passes straight through — later at every arrival, but ready to leave the middle
+        // stop long before X even starts moving again.
+        let y = raw("Y", arrivals: [110, 250, 750], departures: [110, 250, 750])
+
+        #expect(TimetableBuilder.overtakes(y, x),
+                "Y leaves the middle stop at 250, before X's own 500 — invisible to a check on arrivals alone")
+
+        let groups = TimetableBuilder.nonOvertakingGroups([0, 1], in: [x, y])
+        #expect(groups.count == 2, "X's dwell has to split them into two patterns")
     }
 
     /// A line with no trips must not produce a pattern, for the same reason the stop

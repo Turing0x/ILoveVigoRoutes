@@ -22,7 +22,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
-| **Auditoría del motor RAPTOR** | 🟡 Tandas 1–2 hechas (horas falsas; el criterio por defecto elegía de un conjunto incompleto). 3–4 en `AUDITORIA-RAPTOR.md` |
+| **Auditoría del motor RAPTOR** | 🟡 Tandas 1–3 hechas (horas falsas; criterio incompleto; huecos de mutación). 4 en `AUDITORIA-RAPTOR.md` |
 
 ---
 
@@ -2062,3 +2062,71 @@ tiempos verde, planificación en frío en 195 ms. `xcodebuild` Debug y Release c
 
 **Pendiente de esta auditoría:** Tandas 3 (H-07/H-08/H-09, cerrar los huecos de mutación) y 4
 (H-10 a H-19, deuda y precisión) — en `AUDITORIA-RAPTOR.md` §8.
+
+## Auditoría del motor RAPTOR — Tanda 3: cerrar los huecos de mutación
+
+Tercera tanda de `AUDITORIA-RAPTOR.md`. Corrige H-07, H-08 y H-09 — no arreglos de código
+(el motor era correcto en los tres casos), sino huecos de verificación: mutaciones deliberadas
+que la suite entera no notaba porque ninguna instancia de prueba producía la forma de red que
+las expone. Las tres tienen el mismo origen: `RandomPlannerFixture` nunca genera un empate
+—cadencia siempre positiva, footpaths de 30 a 300 s— y ningún fixture del proyecto tiene
+tiempo de parada, así que dos ramas del código nunca se ejercen con los valores que las
+distinguen.
+
+**H-07 — tres empates estrictos sin ningún test.** Tres mutaciones de un carácter
+(`<`→`<=` en la mejora al subir a un bus y en la relajación de una caminata; `>`→`>=` en la
+elegibilidad de embarque) sobrevivían a la suite de 368 tests sin un solo fallo. La causa,
+confirmada: en un empate el **valor** no cambia —por definición de empate— así que comparar
+solo llegadas, como hace `BruteForceReferenceTests`, nunca podía distinguirlas. Lo que cambia
+es **qué** parent, patrón o viaje se registra.
+
+Tres redes mínimas, cada una con un empate exacto en el sitio que cada comparación mira,
+verificadas primero a mano contra el motor sin modificar y después contra cada mutación por
+separado, revirtiendo entre una y otra:
+
+- **La mejora al subir a un bus.** Dos patrones independientes llegan a la misma parada en el
+  mismo instante; el patrón que se escanea primero tiene que ganar el empate.
+- **La relajación de una caminata.** Dos paradas recién servidas caminan hasta el mismo
+  destino y llegan a la vez; la que se procesa primero tiene que ganar.
+- **La elegibilidad de embarque, y aquí la auditoría se quedó corta.** El informe la describía
+  como «mismo horario, distinto `tripID`» — una cuestión de qué se enseña en pantalla, sin
+  consecuencia en la hora. Construida la red exacta que expone la tercera mutación, resultó
+  que además puede **cambiar la hora de llegada a un valor que ningún pasajero real podría
+  alcanzar**: un viaje que ya había salido de la parada de origen antes de que el pasajero
+  estuviera listo para subir se cuela por un reexamen de embarque disparado por un empate en
+  una parada posterior, sustituyendo el viaje realmente cogido — 250 en vez de 300, con el
+  viaje sustituto ya partido antes de que nadie pudiera montarse en él. Confirmado ejecutando
+  la red contra el motor mutado antes de escribir el test definitivo. **Reclasificada de
+  "deuda/testabilidad" a lo que de verdad es**: un fallo de optimalidad latente, sencillamente
+  uno que ningún dato del proyecto llega a activar hoy.
+
+**H-08 — el desplazamiento entre días en el cambio de hora.** La aritmética
+(`midnight.timeIntervalSince(anchorMidnight)`, no `dayShift * 86 400`) es correcta y estaba sin
+comprobar: ningún fixture ancla un `Timetable` cerca del 29/30 de marzo o el 25/26 de octubre.
+Nuevo fixture GTFS mínimo con un viaje a las 00:05 del día siguiente, anclado el
+2026-10-25 — la noche más larga del año en Madrid, 25 horas — comprobando la hora absoluta
+resultante contra el `Calendar` real, sin calcular el desplazamiento a mano en el test.
+
+**H-09 — la mitad de `overtakes` sin ejercer.** La cláusula de `departures` existe para
+separar dos viajes cuando el tiempo de parada hace que uno llegue antes pero salga después; el
+feed real tiene **0 segundos de parada en las 137 456 filas de `stop_times.txt`**, así que
+`arrival == departure` siempre y esa cláusula nunca se distingue de la de `arrivals`. Se
+expusieron `TimetableBuilder.RawTrip`, `.overtakes` y `.nonOvertakingGroups` — de `private` a
+`internal`, y las dos funciones de instancia a `static`, porque ninguna de las dos toca
+`self`: la misma razón por la que `JourneyReconstruction.egressCandidates` ya es `internal`
+en vez de `private`. Test directo con dos viajes construidos a mano donde ninguno de los dos
+adelanta al otro en llegada en ninguna posición, pero uno sale antes de la parada intermedia
+tras un tiempo de espera de 300 s que el otro no tiene.
+
+**Verificado por mutación, las cinco correcciones** (las tres de H-07 más H-08 y H-09), cada
+una revertida y confirmada por separado: cada mutación tumba **exactamente** el test que le
+corresponde, sin efectos colaterales sobre los otros dos de la misma familia.
+
+**Verificación.** Suite de `VigoCore`: **371 tests en verde** (368 antes de esta tanda, +5:
+`rideTieGoesToTheFirstScannedPattern`, `footpathTieGoesToTheFirstProcessedSource`,
+`boardingTieDoesNotSwitchTrips`, `dstOffsetIsTheRealGap`, `overtakesCatchesADepartureOnly`).
+Contra el feed real: suite de integración y de tiempos verde. `xcodebuild` Debug y Release
+compilan contra `generic/platform=iOS`.
+
+**Pendiente de esta auditoría:** Tanda 4 (H-10 a H-19, deuda y precisión) — en
+`AUDITORIA-RAPTOR.md` §8.

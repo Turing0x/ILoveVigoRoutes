@@ -220,6 +220,152 @@ struct RaptorEngineTests {
         #expect(timetable.patternRouteShortName[Int(pattern)] == "L2")
     }
 
+    // MARK: - Ties (Auditoría RAPTOR, Tanda 3: H-07)
+    //
+    // `RandomPlannerFixture` never produces two things arriving at the exact same instant —
+    // every headway is a positive random draw, every footpath 30–300 s — so a strict `<`
+    // relaxed to `<=` anywhere below changes nothing any test here or in
+    // `BruteForceReferenceTests` would notice: a tie means the *value* is identical either
+    // way, and only *which* pattern, trip or parent wins it differs. These three networks
+    // exist solely to put a genuine tie where each comparison lives, so which side wins is
+    // finally something a test can pin down.
+
+    /// Two independent patterns reach Q2 at the exact same instant: A (pattern 0) via Q0,
+    /// B (pattern 1) via Q1. Patterns are scanned in ascending index order, so A's write
+    /// happens first; B's tied arrival must not be allowed to overwrite it.
+    private static func tiedRidesTimetable() -> (timetable: Timetable, q0: Int, q1: Int, q2: Int) {
+        let stops = (0...2).map { PlannerFixture.stop("TR\($0)", eastMetres: Double($0) * 500) }
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 2, 4], patternStops: [0, 2, 1, 2],
+            patternTripsOffset: [0, 1, 2],
+            tripRefs: [
+                TripRef(tripID: TripID("A"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+                TripRef(tripID: TripID("B"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0, 2],
+            tripArrival: [1_000, 2_000, 1_500, 2_000], tripDeparture: [1_000, 2_000, 1_500, 2_000],
+            patternRouteID: [RouteID("RA"), RouteID("RB")], patternRouteShortName: ["A", "B"],
+            stopPatternsOffset: [0, 1, 2, 4],
+            stopPatternPattern: [0, 1, 0, 1], stopPatternPosition: [0, 0, 1, 1],
+            footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2)
+    }
+
+    @Test("A ride's improvement tie goes to the first-scanned pattern")
+    func rideTieGoesToTheFirstScannedPattern() throws {
+        let (timetable, q0, q1, q2) = Self.tiedRidesTimetable()
+        let result = RaptorEngine().run(timetable, RaptorQuery(
+            access: [StopWalk(stop: Int32(q0), seconds: 0), StopWalk(stop: Int32(q1), seconds: 0)],
+            egress: [], departure: 0, horizon: 10_800))
+
+        #expect(result.arrival(round: 1, stop: q2) == 2_000, "both patterns tie here, on purpose")
+        guard case .ride(let pattern, _, _, _)? = result.parent(round: 1, stop: q2) else {
+            Issue.record("expected a ride into Q2"); return
+        }
+        #expect(timetable.patternRouteShortName[Int(pattern)] == "A",
+                "pattern 0 is scanned first; a tie must not let a later scan overwrite it")
+    }
+
+    /// Two independent rides feed the same footpath target at the exact same instant: from
+    /// W1 (pattern 0's own stop) a 100 s walk, from W3 (pattern 1's) a 0 s walk. `riddenStops`
+    /// preserves pattern-scan order, so W1 is relaxed first; W3's tied arrival must not
+    /// overwrite the parent it already wrote.
+    private static func tiedFootpathsTimetable() -> (timetable: Timetable, w0: Int, w2: Int, target: Int) {
+        let stops = (0...4).map { PlannerFixture.stop("TF\($0)", eastMetres: Double($0) * 500) }
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 2, 4], patternStops: [0, 1, 2, 3],
+            patternTripsOffset: [0, 1, 2],
+            tripRefs: [
+                TripRef(tripID: TripID("A"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+                TripRef(tripID: TripID("B"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0, 2],
+            tripArrival: [1_000, 1_500, 1_000, 1_600], tripDeparture: [1_000, 1_500, 1_000, 1_600],
+            patternRouteID: [RouteID("RA"), RouteID("RB")], patternRouteShortName: ["A", "B"],
+            stopPatternsOffset: [0, 1, 2, 3, 4, 4],
+            stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 0, 1],
+            footpathOffset: [0, 0, 1, 1, 2, 2],
+            footpathTarget: [4, 4], footpathSeconds: [100, 0],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 2, 4)
+    }
+
+    @Test("A footpath's improvement tie goes to the first-processed source")
+    func footpathTieGoesToTheFirstProcessedSource() throws {
+        let (timetable, w0, w2, target) = Self.tiedFootpathsTimetable()
+        let result = RaptorEngine().run(timetable, RaptorQuery(
+            access: [StopWalk(stop: Int32(w0), seconds: 0), StopWalk(stop: Int32(w2), seconds: 0)],
+            egress: [], departure: 0, horizon: 10_800))
+
+        #expect(result.arrival(round: 1, stop: target) == 1_600, "both footpaths tie here, on purpose")
+        #expect(result.parent(round: 1, stop: target) == .walk(from: 1, seconds: 100),
+                "pattern 0's ride (stop 1) is relaxed first; a tie must not let the second overwrite it")
+    }
+
+    /// A single pattern, two trips: trip 0 alone (50, 150, 250), trip 1 alone (100, 150, 300)
+    /// — non-overtaking, since trip 1 never arrives or departs earlier than trip 0 anywhere.
+    /// Access reaches position 0 at 80 (only trip 1's 100 is catchable there) and position 1
+    /// at exactly 150 — trip 1's *own* departure there, a tie. Re-searching on a tie would
+    /// switch to trip 0, which is not really catchable at all: it already left position 0 at
+    /// 50, before the passenger was even ready at 80.
+    private static func boardingTieTimetable() -> (timetable: Timetable, p0: Int, p1: Int, p2: Int) {
+        let stops = (0...2).map { PlannerFixture.stop("BT\($0)", eastMetres: Double($0) * 500) }
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 3], patternStops: [0, 1, 2],
+            patternTripsOffset: [0, 2],
+            tripRefs: [
+                TripRef(tripID: TripID("T0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+                TripRef(tripID: TripID("T1"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0],
+            tripArrival: [50, 150, 250, 100, 150, 300], tripDeparture: [50, 150, 250, 100, 150, 300],
+            patternRouteID: [RouteID("R")], patternRouteShortName: ["L"],
+            stopPatternsOffset: [0, 1, 2, 3],
+            stopPatternPattern: [0, 0, 0], stopPatternPosition: [0, 1, 2],
+            footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2)
+    }
+
+    @Test("A boarding tie does not switch to a trip that was never actually catchable")
+    func boardingTieDoesNotSwitchTrips() throws {
+        let (timetable, p0, p1, p2) = Self.boardingTieTimetable()
+        let result = RaptorEngine().run(timetable, RaptorQuery(
+            access: [StopWalk(stop: Int32(p0), seconds: 80), StopWalk(stop: Int32(p1), seconds: 150)],
+            egress: [], departure: 0, horizon: 10_800))
+
+        // Riding trip 1 start to end reaches 300; switching to trip 0 at the tie would claim
+        // 250 — earlier than any passenger following this schedule could actually achieve.
+        #expect(result.arrival(round: 1, stop: p2) == 300,
+                "trip 1, ridden faithfully — not 250, which nobody could really catch")
+        guard case .ride(_, let trip, _, _)? = result.parent(round: 1, stop: p2) else {
+            Issue.record("expected a ride into the last stop"); return
+        }
+        #expect(timetable.tripRef(pattern: 0, trip: Int(trip)).tripID == TripID("T1"))
+    }
+
     // MARK: - Bounds
 
     @Test("Nothing outside the horizon is reached")
