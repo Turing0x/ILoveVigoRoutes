@@ -24,6 +24,7 @@ struct MapRouteSheet: View {
     let onCloseDetail: () -> Void
     let onFollow: () -> Void
     let onStopFollowing: () -> Void
+    let onStartActiveJourney: () -> Void
     let onClose: () -> Void
 
     /// Ticks while the sheet is open so "hace N min" and "Ya ha salido" stop being a
@@ -119,7 +120,8 @@ struct MapRouteSheet: View {
                                    live: live(journey),
                                    isFollowing: state.isFollowing,
                                    onFollow: onFollow,
-                                   onStopFollowing: onStopFollowing)
+                                   onStopFollowing: onStopFollowing,
+                                   onStartActiveJourney: onStartActiveJourney)
             }
             .sheet(item: $editing) { role in
                 MapSearchSheet(purpose: .endpoint(role),
@@ -301,6 +303,14 @@ struct MapJourneyLegsView: View {
     let isFollowing: Bool
     let onFollow: () -> Void
     let onStopFollowing: () -> Void
+    let onStartActiveJourney: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    /// A walk-only journey has no bus to have boarded — nothing to persist.
+    private var hasRide: Bool {
+        journey.legs.contains { if case .ride = $0 { true } else { false } }
+    }
 
     var body: some View {
         List {
@@ -326,6 +336,17 @@ struct MapJourneyLegsView: View {
                 }
             } footer: {
                 Text("Mantiene la pantalla encendida y la cámara mirando hacia donde caminas. Sin avisos de bajada: el horario por sí solo no puede prometerlos.")
+            }
+
+            if hasRide {
+                Section {
+                    Button("He subido a este bus", systemImage: "bus.fill") {
+                        onStartActiveJourney()
+                        dismiss()
+                    }
+                } footer: {
+                    Text("Queda a la vista en todas las pestañas hasta que llegues o lo termines a mano. No se replanifica: es este autobús, no una nueva búsqueda.")
+                }
             }
 
             Section("Tramos") {

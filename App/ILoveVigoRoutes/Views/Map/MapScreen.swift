@@ -271,6 +271,11 @@ struct MapScreen: View {
                 onCloseDetail: { model.dismiss() },
                 onFollow: { model.startFollowing() },
                 onStopFollowing: { model.stopFollowing() },
+                onStartActiveJourney: {
+                    if let snapshot = model.startActiveJourney() {
+                        environment.activeJourney.start(snapshot)
+                    }
+                },
                 onClose: { dismissSheet(model) })
 
         case .searching:

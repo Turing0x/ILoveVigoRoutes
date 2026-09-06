@@ -20,7 +20,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 8 — Caminatas en el mapa y actualizar a mano** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
-| **Fase 11 — Trayecto activo persistente** | 🟡 En marcha |
+| **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -1441,3 +1441,101 @@ lo caro sigue siendo leer `shapePoint`, y eso sigue haciéndose solo para las vi
 - [x] Con «Llega antes» la app se comporta como antes de esta fase
 
 **Verificado en dispositivo por el propietario el 2026-09-06. Fase 10 cerrada del todo.**
+
+## Fase 11 — Trayecto activo persistente
+
+Plan en `PLAN-FASES-8-13.md`, §Fase 11. Rama `fase11-trayecto-activo`.
+
+### Hecho
+
+- [x] **Migración `v3`: `activeJourney` y `recentSearch` a la vez.**
+  `VigoCore/Sources/VigoCore/Persistence/AppDatabase.swift`. Las dos tablas del plan, tal
+  como pide §11.2: `recentSearch` queda creada y vacía hasta la Fase 12, para no encadenar
+  una `v4` dos semanas después. Sin FK a `stop` en ninguna de las dos, por el mismo motivo
+  que ya documenta la migración `v2`.
+
+- [x] **`ActiveJourneySnapshot` + `ActiveJourneyRecord`, nuevos en `VigoCore/ActiveJourney/`.**
+  Instantánea autosuficiente (`Codable` propio, no `Journey` serializado): un trayecto activo
+  no se replanifica nunca, así que no le afecta que `Journey`/`JourneyLeg` sigan cambiando de
+  forma (la Fase 10 lo acaba de hacer). Cada parada se guarda como `stopID` opcional más
+  coordenada de respaldo (`StopRef`), nunca como un `Stop` congelado — la misma regla de
+  anclaje que la Fase 4 fijó para lugares guardados. `staleness(now:grace:)` es pura y se
+  mide contra `scheduledArrival`, no contra `scheduledDeparture` — el mismo error plausible
+  que Fase 8 ya tuvo que evitar en `hasDeparted`.
+  **Desviación menor del plan:** la resolución de un `stopID` contra la tabla `stop` viva no
+  vive dentro de `ActiveJourneySnapshot` (que es un tipo de datos puro, sin acceso a base de
+  datos), sino que queda para quien la use — igual que `SavedPlaceRow` no resuelve su propio
+  `Stop` y es `TransitRepository` quien lo hace al leer. Aquí no ha hecho falta ese paso
+  extra: la coordenada de respaldo basta para dibujar y anunciar el destino, y nada en esta
+  fase necesita todavía el `Stop` resuelto.
+  `TransitRepository.swift` gana `// MARK: - Trayecto activo`: `activeJourney()`,
+  `startActiveJourney(_:startedAt:)` (upsert sobre la clave constante `"current"`, así que
+  empezar un segundo trayecto sin terminar el primero deja exactamente uno), `endActiveJourney()`
+  (cubre Terminar y Cancelar, distinguidos solo en la UI), `markActiveJourneyStale()` y
+  `extendActiveJourney(to:)` ("Sigo en él", mueve `scheduledArrival` y re-escribe el blob para
+  que columna y payload no diverjan).
+  Tests: `ActiveJourneyTests.swift` (9) — round-trip JSON con transbordo y paradas
+  intermedias, clave constante impide dos filas activas, los dos bordes de `staleness`,
+  `extendActiveJourney` vuelve a activo y mueve la ventana, `endActiveJourney` sin fila no
+  lanza, y un trayecto sigue leyéndose con destino resoluble por coordenada tras perder su
+  parada del feed. `MigrationTests.swift` ampliado (datos de `v2` sobreviven a `v3`, ambas
+  tablas nuevas presentes y vacías).
+
+- [x] **`ActiveJourneyStore`, nuevo en el target de app.**
+  `App/ILoveVigoRoutes/ActiveJourneyStore.swift`, calcado de `SavedPlacesStore`:
+  `@MainActor @Observable`, `reload()` re-lee y recalcula `staleness`, `start`/`end`/`extend`
+  mutan y recargan. `AppEnvironment` lo expone como `activeJourney`.
+
+- [x] **La cápsula persistente, en `RootView`, no en `MapScreen`.**
+  `App/ILoveVigoRoutes/Views/ActiveJourneyBar.swift` (nuevo). Una línea con
+  `.regularMaterial` en cápsula, no una tarjeta — línea, parada de bajada, hora prevista y
+  chevron, o «¿Sigues en este trayecto?» con el botón «Sigo en él» cuando está `.stale`. Vive
+  en `RootView` vía `.safeAreaInset(edge: .bottom)` sobre el propio `TabView`, por encima de
+  la barra de pestañas y compartida por Mapa y Favoritas — `MapScreen` ya usa su propio
+  `safeAreaInset` para la barra de búsqueda, pero ese está dentro de la pestaña Mapa
+  únicamente. Menú contextual con Terminar/Cancelar; Cancelar pide confirmación destructiva,
+  Terminar no. `RootView` recalcula `staleness` al volver a primer plano
+  (`scenePhase == .active`), para que un trayecto empezado antes de que el teléfono se
+  durmiera dos horas no siga leyendo `.active`.
+  **Desviación del plan:** tocar la cápsula abre una hoja propia
+  (`ActiveJourneyDetailSheet`, dentro del mismo fichero) con los tramos del trayecto, en vez
+  de "abrir el mapa con ese trayecto en `.journeyDetail`" como decía el plan. Un trayecto
+  activo es una instantánea (`ActiveJourneySnapshot`), no un `Journey` vivo que el
+  planificador acaba de producir esta sesión — encajarlo en `MapNavigationState.journeyDetail`
+  habría exigido enseñarle a ese modo a mostrar algo que no es una alternativa recién
+  calculada, tocando una máquina de estados que la Fase 5 ya fijó con cuidado. La hoja propia
+  da la misma información (tramos, línea, paradas, llegada prevista, Terminar/Cancelar) sin
+  ese riesgo.
+
+- [x] **«He subido a este bus».**
+  `App/ILoveVigoRoutes/Views/Map/MapRouteSheet.swift`: `MapJourneyLegsView` gana una sección
+  con el botón, oculta en un trayecto solo-a-pie (no hay bus que haya salido). Al tocarlo,
+  `MapScreenModel.startActiveJourney()` construye el `ActiveJourneySnapshot` a partir de
+  `state.currentJourney` (construcción pura, sin tocar la base de datos — la misma separación
+  que ya hay entre el flujo del mapa y `AppEnvironment.requestOnMap`), y `MapScreen` se lo
+  pasa a `environment.activeJourney.start(_:)`.
+  **Iniciar un trayecto no enciende `isFollowing`**, tal como pide §11.5: son botones
+  distintos, con costes distintos, y no se tocan entre sí.
+
+Suite de `VigoCore`: **321 tests en verde** (+10). Target de app: **16 tests en verde**
+(sin cambios — la Fase 11 no tenía test nuevo de app pendiente de escribir; los del store se
+cubren indirectamente por los de `TransitRepository`). Debug y Release compilan contra
+`generic/platform=iOS`.
+
+**Deliberadamente fuera de esta fase, documentado para que no se lea como olvido:**
+
+- `recentSearch` queda creada y sin usar — es la Fase 12.
+- Ningún aviso de proximidad al destino — es la Fase 13, y depende de esta.
+- El manejador de notificaciones que la Fase 13 necesitará para leer `intermediate` y decidir
+  «la parada anterior» no existe todavía; el campo ya está en el `Codable` para cuando llegue.
+
+**Pendiente de comprobar en dispositivo** (lo hace el propietario):
+
+- [ ] La cápsula aparece al tocar «He subido a este bus» y sigue visible al cambiar de
+      pestaña (Mapa ↔ Favoritas)
+- [ ] Tocar la cápsula abre la hoja de detalle con los tramos correctos
+- [ ] Terminar y Cancelar (con su confirmación) borran la cápsula
+- [ ] Un trayecto activo sobrevive a matar y relanzar la app
+- [ ] Pasados los 90 minutos de gracia tras la llegada prevista, la cápsula cambia a
+      «¿Sigues en este trayecto?» y «Sigo en él» la vuelve a `.active`
+- [ ] Reimportar el feed (o esperar al refresco semanal) no hace desaparecer la cápsula

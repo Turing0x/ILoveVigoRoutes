@@ -12,6 +12,7 @@ final class AppEnvironment {
     let repository: TransitRepository
     let favourites: FavouritesStore
     let savedPlaces: SavedPlacesStore
+    let activeJourney: ActiveJourneyStore
     let arrivals: ArrivalsService
     let feedService: GTFSFeedService
     let planner: JourneyPlanner
@@ -55,6 +56,7 @@ final class AppEnvironment {
         self.repository = repository
         self.favourites = FavouritesStore(repository: repository)
         self.savedPlaces = SavedPlacesStore(repository: repository)
+        self.activeJourney = ActiveJourneyStore(repository: repository)
         let throttled = ThrottledRealtimeProvider(
             upstream: ConcelloRealtimeClient(), minimumInterval: 20)
         self.throttledRealtime = throttled

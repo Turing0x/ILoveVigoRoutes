@@ -664,6 +664,74 @@ public struct TransitRepository: Sendable {
         }
     }
 
+    // MARK: - Trayecto activo
+
+    public func activeJourney() throws -> ActiveJourneySnapshot? {
+        try database.writer.read { db in
+            guard let row = try ActiveJourneyRow.fetchOne(db, key: ActiveJourneyRow.currentID) else {
+                return nil
+            }
+            return try JSONDecoder().decode(ActiveJourneySnapshot.self, from: row.payload)
+        }
+    }
+
+    /// `upsert`, not `insert`: the primary key is the constant `"current"`, so starting a
+    /// second journey without ending the first replaces it in place — there is never a way
+    /// to end up with two rows.
+    public func startActiveJourney(_ snapshot: ActiveJourneySnapshot, startedAt: Date = Date()) throws {
+        let payload = try JSONEncoder().encode(snapshot)
+        try database.writer.write { db in
+            let row = ActiveJourneyRow(
+                id: ActiveJourneyRow.currentID, startedAt: startedAt, state: "active",
+                destinationName: snapshot.destination.name,
+                destinationStopID: snapshot.destination.stopID?.rawValue,
+                destinationLatitude: snapshot.destination.latitude,
+                destinationLongitude: snapshot.destination.longitude,
+                scheduledArrival: snapshot.scheduledArrival,
+                payload: payload)
+            try row.upsert(db)
+        }
+    }
+
+    /// Covers both "Terminar" and "Cancelar": the two are distinguished in the UI, never in
+    /// the data, since there is no history to keep either way (a confirmed product decision —
+    /// no record of finished journeys).
+    public func endActiveJourney() throws {
+        try database.writer.write { db in
+            _ = try ActiveJourneyRow.deleteOne(db, key: ActiveJourneyRow.currentID)
+        }
+    }
+
+    public func markActiveJourneyStale() throws {
+        try database.writer.write { db in
+            try db.execute(sql: "UPDATE activeJourney SET state = 'stale' WHERE id = ?",
+                           arguments: [ActiveJourneyRow.currentID])
+        }
+    }
+
+    /// "Sigo en él": pushes the deadline forward. The caller (`ActiveJourneyStore`) computes
+    /// the new `scheduledArrival` — normally the current one plus another grace window — so
+    /// this stays a plain write with no policy of its own.
+    ///
+    /// Updates the flat `scheduledArrival` column **and** re-encodes the payload with it, so
+    /// a later `activeJourney()` and `staleness(now:)` agree with what this just wrote —
+    /// otherwise the row would go stale again one grace period sooner than the column says.
+    public func extendActiveJourney(to scheduledArrival: Date) throws {
+        try database.writer.write { db in
+            guard var row = try ActiveJourneyRow.fetchOne(db, key: ActiveJourneyRow.currentID) else { return }
+            let snapshot = try JSONDecoder().decode(ActiveJourneySnapshot.self, from: row.payload)
+            let extended = ActiveJourneySnapshot(
+                originName: snapshot.originName, destination: snapshot.destination,
+                rides: snapshot.rides, egressWalkSeconds: snapshot.egressWalkSeconds,
+                scheduledDeparture: snapshot.scheduledDeparture,
+                scheduledArrival: scheduledArrival, transfers: snapshot.transfers)
+            row.scheduledArrival = scheduledArrival
+            row.state = "active"
+            row.payload = try JSONEncoder().encode(extended)
+            try row.update(db)
+        }
+    }
+
     // MARK: - Saved place / journey row mapping
 
     private static func resolveStops(for stopIDs: [String], db: Database) throws -> [String: Stop] {

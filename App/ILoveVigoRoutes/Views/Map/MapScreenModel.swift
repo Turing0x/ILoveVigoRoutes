@@ -352,6 +352,18 @@ final class MapScreenModel {
         drawn = DrawnRoute(journeys: journeys, traces: traces)
     }
 
+    /// Builds a snapshot of the currently highlighted alternative, ready for
+    /// `ActiveJourneyStore.start(_:)`.
+    ///
+    /// Pure construction only — persisting it is `AppEnvironment`'s job, not this model's,
+    /// the same separation `AppEnvironment.requestOnMap` draws between the map's own flow
+    /// and the one piece of state two screens share.
+    func startActiveJourney() -> ActiveJourneySnapshot? {
+        guard let journey = state.currentJourney,
+              let origin = state.origin, let destination = state.destination else { return nil }
+        return ActiveJourneySnapshot(journey, originLabel: origin.label, destinationLabel: destination.label)
+    }
+
     /// Straight-line distance from the device to a place, already worded. `nil` when there is
     /// no fix yet, which is a normal state and not worth a placeholder.
     func distanceText(to place: MapPlace) -> String? {
