@@ -6,7 +6,7 @@ import VigoCore
 @Suite("Búsqueda de direcciones")
 @MainActor
 struct AddressSearchModelTests {
-    private let suggestion = AddressSuggestion(id: UUID(), title: "Hospital Álvaro Cunqueiro",
+    private let suggestion = AddressSuggestion(title: "Hospital Álvaro Cunqueiro",
                                                subtitle: "Estrada Clara Campoamor, Vigo")
 
     @Test("Una consulta de menos de tres caracteres no llega al geocoder")
@@ -78,6 +78,41 @@ struct AddressSearchModelTests {
         #expect(VigoSearchRegion.contains(Coordinate(latitude: 42.2257, longitude: -8.7413)))
         #expect(!VigoSearchRegion.contains(Coordinate(latitude: 42.8782, longitude: -8.5448)))
         #expect(!VigoSearchRegion.contains(Coordinate(latitude: 41.1579, longitude: -8.6291)))
+    }
+
+    /// H-16: nothing upstream of `AddressSearchModel` ever times out a completer that never
+    /// calls back — no network, or an Apple throttle with no error. Before this, `isSearching`
+    /// had no way out of that except the user typing something new.
+    @Test("Un geocoder que nunca contesta expira en vez de dejar la búsqueda colgada")
+    func neverRespondingGeocoderTimesOut() async {
+        let service = StubAddressSearchService(suggestions: { _ in
+            // Outlives the test on purpose: only the model's own timeout can end this.
+            try? await Task.sleep(for: .seconds(3600))
+            return []
+        })
+        let model = AddressSearchModel(service: service, debounce: .zero, timeout: .milliseconds(20))
+
+        model.update(query: "Hospital")
+        try? await Task.sleep(for: .milliseconds(150))
+
+        #expect(!model.isSearching)
+        #expect(model.failed)
+        #expect(model.failure == .unavailable)
+        #expect(model.suggestions.isEmpty)
+    }
+
+    /// H-19: two `AddressSuggestion`s that render the same row must be the same suggestion —
+    /// the identity a `ForEach` and `resolving == suggestion.id` both depend on cannot be a
+    /// fresh random token on every emission of what MapKit considers the same completion.
+    @Test("La identidad de una sugerencia sale del contenido, no de un token aleatorio")
+    func suggestionIdentityIsContentDerived() {
+        let a = AddressSuggestion(title: "Praza de América", subtitle: "Vigo")
+        let b = AddressSuggestion(title: "Praza de América", subtitle: "Vigo")
+        #expect(a.id == b.id)
+        #expect(a == b)
+
+        let different = AddressSuggestion(title: "Praza de España", subtitle: "Vigo")
+        #expect(a.id != different.id)
     }
 
     private func settle() async {

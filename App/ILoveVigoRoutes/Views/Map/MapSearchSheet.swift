@@ -468,6 +468,12 @@ struct MapSearchSheet: View {
                 Label("Guardar", systemImage: "mappin.circle")
             }
             .tint(.indigo)
+            // H-18: the tap on this same row already guards against a second resolution
+            // starting mid-flight; the swipe action did not, so a tap followed quickly by a
+            // swipe-to-save fired two `MKLocalSearch` requests that raced to cancel each
+            // other — the second's `activeSearch?.cancel()` killing the first, which then
+            // surfaced as "no he podido buscar" even though the second one succeeded.
+            .disabled(addresses.resolving != nil)
         }
     }
 

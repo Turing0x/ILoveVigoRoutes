@@ -29,11 +29,19 @@ final class MapKitAddressSearchService: NSObject, AddressSearching, MKLocalSearc
 
     /// The MapKit objects behind the tokens handed out in `AddressSuggestion`, replaced
     /// wholesale on every query so the table cannot grow without bound.
-    private var completions: [UUID: MKLocalSearchCompletion] = [:]
+    private var completions: [String: MKLocalSearchCompletion] = [:]
 
     /// The caller waiting on the current `queryFragment`. At most one may exist, and it must
     /// be resumed exactly once — resuming twice traps.
     private var pending: CheckedContinuation<[AddressSuggestion], Never>?
+
+    /// Bumped every time a new continuation is installed, so a cancellation handler that
+    /// fires after the query it belongs to has already been superseded (H-15) can tell and
+    /// leave the new one alone — `withTaskCancellationHandler`'s `onCancel` runs on an
+    /// arbitrary executor and has to hop to the main actor before it can touch `pending`,
+    /// and by the time it lands a newer query may have already taken that continuation's
+    /// place.
+    private var generation = 0
 
     private var activeSearch: MKLocalSearch?
 
@@ -57,8 +65,12 @@ final class MapKitAddressSearchService: NSObject, AddressSearching, MKLocalSearc
     /// faithfully but then something above would have to decide which emission belongs to
     /// which query and when to stop listening — state we would have to invent. Debounce
     /// already collapses keystrokes, so "the best answer so far, shortly after you stopped
-    /// typing" maps one-to-one onto a single `await`. Later refinements are dropped; that is
-    /// the deliberate cost.
+    /// typing" maps one-to-one onto a single `await`. Later refinements really are dropped
+    /// — `completeResults()` below only acts while a continuation is still waiting for one,
+    /// so a refinement that lands after that continuation has already been resumed touches
+    /// nothing (H-13/H-14: this used to replace `completions` unconditionally, so a
+    /// refinement arriving after the resume could invalidate the very tokens just handed to
+    /// the caller — a suggestion visible on screen would resolve to "not found").
     func suggestions(for query: String) async -> [AddressSuggestion] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= Self.minimumQueryLength else {
@@ -66,6 +78,8 @@ final class MapKitAddressSearchService: NSObject, AddressSearching, MKLocalSearc
             return []
         }
 
+        generation += 1
+        let mine = generation
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<[AddressSuggestion], Never>) in
                 // A previous query may still be waiting. Retire it before taking its place,
@@ -77,8 +91,13 @@ final class MapKitAddressSearchService: NSObject, AddressSearching, MKLocalSearc
             }
         } onCancel: {
             // The pending slot is main-actor state, so cancellation cannot resume it from
-            // here. Hop, and let `resumePending` decide whether anything is left to resume.
-            Task { @MainActor in self.cancelPending() }
+            // here. Hop, and let `resumePending` decide whether anything is left to resume
+            // — guarded by `generation` so this stale hop cannot cancel a *newer* query that
+            // has since taken the pending slot (H-15).
+            Task { @MainActor in
+                guard self.generation == mine else { return }
+                self.cancelPending()
+            }
         }
     }
 
@@ -97,13 +116,27 @@ final class MapKitAddressSearchService: NSObject, AddressSearching, MKLocalSearc
     /// only the small, `Sendable` values the caller needs. Passing MapKit classes through a
     /// continuation is both unnecessary and rejected by strict concurrency.
     private func completeResults() {
+        // Nothing is waiting: either the answer already went out and this is a late
+        // refinement, or the query was cancelled. Touching `completions` here would
+        // invalidate tokens a caller may already be resolving (H-13).
+        guard pending != nil else { return }
+
         // MapKit's order is its relevance ranking, so keep it rather than round-tripping
-        // through a dictionary and showing a different list on every keystroke.
-        let tokened = completer.results.map { (UUID(), $0) }
+        // through a dictionary and showing a different list on every keystroke. Deduplicated
+        // by content (H-19's id): two completions that render identically would otherwise
+        // collide in `completions` and in `ForEach`, keeping the first — MapKit's own best
+        // guess — matches how the ranking already works everywhere else here.
+        var seen = Set<String>()
+        var suggestions: [AddressSuggestion] = []
+        var tokened: [(String, MKLocalSearchCompletion)] = []
+        for completion in completer.results {
+            let suggestion = AddressSuggestion(title: completion.title, subtitle: completion.subtitle)
+            guard seen.insert(suggestion.id).inserted else { continue }
+            suggestions.append(suggestion)
+            tokened.append((suggestion.id, completion))
+        }
         completions = Dictionary(uniqueKeysWithValues: tokened)
-        resumePending(with: tokened.map { token, completion in
-            AddressSuggestion(id: token, title: completion.title, subtitle: completion.subtitle)
-        })
+        resumePending(with: suggestions)
     }
 
     // MARK: - Completer delegate
@@ -114,8 +147,8 @@ final class MapKitAddressSearchService: NSObject, AddressSearching, MKLocalSearc
     //
     // It is an assertion about MapKit's threading, which is documented as main-thread. Were a
     // future SDK to call these off-main it would trap rather than misbehave — the right
-    // failure. The fallback if that ever happens is a per-query generation counter checked
-    // inside the hop.
+    // failure. The fallback if that ever happens is checking `generation` inside the hop,
+    // the same guard `suggestions(for:)`'s `onCancel` already uses for the same reason.
 
     nonisolated func completerDidUpdateResults(_: MKLocalSearchCompleter) {
         MainActor.assumeIsolated { self.completeResults() }

@@ -21,7 +21,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
-| **Auditoría del buscador** | 🟡 Tandas A y B hechas. C–D en `AUDITORIA-BUSCADOR.md` |
+| **Auditoría del buscador** | 🟡 Tandas A, B y C hechas. D en `AUDITORIA-BUSCADOR.md` |
 
 ---
 
@@ -1708,3 +1708,84 @@ más además del de costumbre.
 
 Pendiente: Tandas C (`MapKitAddressSearchService`) y D (deuda del buscador y desbloqueo de la
 Fase 12), en `AUDITORIA-BUSCADOR.md` §6.
+
+## Auditoría del buscador — Tanda C: direcciones, el fichero de más riesgo
+
+Corrige H-13, H-14, H-15, H-16 (con H-17 resuelto como efecto colateral), H-18 y H-19 de
+`AUDITORIA-BUSCADOR.md`, en `MapKitAddressSearchService.swift` y `AddressSearchModel.swift` —
+el fichero que el propio código lleva desde la Fase 5 declarando "el de más riesgo de la
+funcionalidad y no cubierto por tests".
+
+**H-13/H-14 — un refinamiento tardío del completer ya no invalida lo que se acaba de
+entregar.** `completeResults()` sustituía `completions` en **cada** llamada de
+`completerDidUpdateResults`, incluida la que llega después de que la continuación ya se ha
+resuelto — así que una sugerencia visible en pantalla podía apuntar a un token que ya no
+estaba en la tabla, y tocarla resolvía a "no encontrado" sin explicación. Ahora
+`completeResults()` sale sin tocar nada si no hay ninguna continuación pendiente
+(`guard pending != nil else { return }`), y el comentario de la cabecera de
+`suggestions(for:)` —que declaraba una invariante que el código no cumplía— vuelve a decir la
+verdad.
+
+**H-15 — un contador de generación en el `onCancel`.** El propio comentario del delegado ya
+proponía esto como plan B para su `assumeIsolated`; aquí hacía falta de verdad. El salto a
+`@MainActor` que la cancelación necesita para tocar `pending` es diferido, así que puede
+aterrizar después de que una consulta más nueva ya haya ocupado ese hueco — y cancelarla por
+error. `generation` se incrementa al instalar cada continuación nueva; el salto guarda su
+propio número y solo actúa si sigue siendo el vigente.
+
+**H-16/H-17 — un límite de tiempo.** Nada expiraba un completer que nunca contestaba —sin
+red, o un throttle de Apple sin error—, y `isSearching` se quedaba en `true` para siempre, sin
+más salida que teclear algo nuevo. `AddressSearchModel.withTimeout(_:operation:)`, nuevo y
+privado, corre la llamada real contra un límite de 5 s (inyectable, como `debounce`); quien
+pierde la carrera deja `failed = true` con `.unavailable`. **No es `withTaskGroup`:** sus
+hijos tienen que ser `@Sendable`, y eso habría forzado a `service` —deliberadamente no
+`Sendable`, según su propio comentario, por estar atado a una API de delegado de hilo
+principal— a cruzar un límite de actor para el que no está pensado. Dos `Task` normales,
+que heredan el aislamiento de `@MainActor` de este método al ser un miembro estático de
+`AddressSearchModel`, y una bandera local resuelven la carrera sin ese cruce.
+
+**H-18 — el arreglo mínimo que el informe ofrecía.** El botón de deslizar "Guardar" en una
+fila de dirección no llevaba el mismo `.disabled(addresses.resolving != nil)` que ya llevaba
+el toque, así que tocar una fila y deslizar otra a la vez lanzaba dos `MKLocalSearch`
+simultáneas que se cancelaban entre sí. Aplicado. **Lo que el informe llama "lo correcto"
+—convertir `resolving` en un conjunto, o serializar en el modelo con una única tarea de
+resolución— no se ha hecho**: cambiaría la forma pública del estado que `MapSearchSheet` ya
+lee (`resolving == suggestion.id`), y el arreglo mínimo ya cierra el escenario concreto que el
+hallazgo describe. Sin test propio: es una condición de una `View`, no del modelo, y el propio
+modelo no cambió de comportamiento aquí.
+
+**H-19 — la identidad de una sugerencia sale de su contenido, no de un token al azar.**
+`AddressSuggestion.id` era un `UUID()` nuevo en cada emisión del completer, así que un
+`ForEach` trataba cada refinamiento como contenido nuevo y `resolving == suggestion.id` dejaba
+de casar a media resolución. Ahora `id` es una propiedad computada,
+`"\(title)\n\(subtitle)"` — el salto de línea en vez de la concatenación simple evita que un
+par título/subtítulo partido de una forma choque con otro partido de otra, y el texto real de
+una sugerencia nunca lleva saltos de línea. `completions` pasa de `[UUID: …]` a `[String: …]`,
+y `completeResults()` deduplica por esa identidad antes de construir la tabla —dos
+`MKLocalSearchCompletion` que se verían idénticos ya no podían convivir en un diccionario
+indexado por su propio contenido sin colisionar.
+
+**H-20, revisado y no aplicado.** La auditoría describía `failed` sobreviviendo a un segundo
+intento de resolución con éxito. Releído el código: `resolve(_:)` ya pone `failed = false` de
+forma síncrona, antes de cualquier `await`, en cuanto arranca — igual que `update(query:)` al
+principio de cada uno de sus dos caminos. No se ha encontrado una secuencia real en la que el
+aviso sobreviva a la siguiente búsqueda o resolución; puede que fuera un falso positivo de la
+auditoría, que el propio informe advertía que podía tener («reporta también los que no tengas
+claros»). No se ha tocado el código para un escenario que no se ha conseguido reproducir.
+
+**Verificación.** Target de app: **18 tests en verde** (+2:
+`neverRespondingGeocoderTimesOut`, `suggestionIdentityIsContentDerived`, ambos en
+`AddressSearchModelTests.swift`). Suite de `VigoCore`: 354 tests, sin cambios — esta tanda no
+toca el paquete. `xcodebuild` Debug y Release contra `generic/platform=iOS` compilan bajo
+`SWIFT_STRICT_CONCURRENCY: complete`. Mutación deliberada: quitar la carrera de
+`withTimeout` y volver al `await` directo tumba las tres aserciones de
+`neverRespondingGeocoderTimesOut`.
+
+**Sin test, verificado solo por lectura — como el propio fichero ya se declaraba antes de esta
+tanda.** H-13, H-14 y H-15 viven enteros dentro de `MapKitAddressSearchService`, por debajo
+del punto donde `AddressSearching` corta para los tests (`StubAddressSearchService` sustituye
+el servicio entero, así que nunca ejercita su implementación real). Verificarlos de verdad
+pediría un doble de `MKLocalSearchCompleter`, que MapKit no ofrece.
+
+Pendiente: Tanda D (deuda del buscador y desbloqueo de la Fase 12), en
+`AUDITORIA-BUSCADOR.md` §6.

@@ -6,12 +6,20 @@ import VigoCore
 ///
 /// Deliberately a plain value and not an `MKLocalSearchCompletion`: that is a main-actor
 /// class which only its own completer may outlive, and letting it reach the view would drag
-/// MapKit into every place that merely wants to draw a row. The `id` doubles as the token
-/// the service resolves with.
+/// MapKit into every place that merely wants to draw a row.
 struct AddressSuggestion: Identifiable, Sendable, Hashable {
-    let id: UUID
     let title: String
     let subtitle: String
+
+    /// Doubles as the token `MapKitAddressSearchService.resolve(_:)` looks its
+    /// `MKLocalSearchCompletion` up by. Derived from the content, not a random `UUID`
+    /// (H-19): the completer re-emits "refinements" for one fragment, several times, and a
+    /// fresh random id on every emission made `ForEach` treat each one as new content, and
+    /// made `resolving == suggestion.id` stop matching mid-resolution the moment a
+    /// refinement landed. Joined with a newline rather than plain concatenation, so a
+    /// title/subtitle pair split one way cannot collide with a different pair split another
+    /// — real completion text is single-line, so this never collides in practice.
+    var id: String { "\(title)\n\(subtitle)" }
 }
 
 enum AddressSearchError: Error, Sendable, Equatable {

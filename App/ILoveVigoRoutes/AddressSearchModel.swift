@@ -24,12 +24,16 @@ final class AddressSearchModel {
 
     private let service: any AddressSearching
     private let debounce: Duration
+    private let timeout: Duration
     private var task: Task<Void, Never>?
 
-    /// `debounce` is injectable only so tests can pass `.zero` and not sleep.
-    init(service: any AddressSearching, debounce: Duration = .milliseconds(300)) {
+    /// `debounce` and `timeout` are injectable only so tests can pass short values and not
+    /// sleep for real.
+    init(service: any AddressSearching, debounce: Duration = .milliseconds(300),
+         timeout: Duration = .seconds(5)) {
         self.service = service
         self.debounce = debounce
+        self.timeout = timeout
     }
 
     func update(query: String) {
@@ -46,16 +50,61 @@ final class AddressSearchModel {
         isSearching = true
         failed = false
         failure = nil
-        task = Task { [weak self, service, debounce] in
+        task = Task { [weak self, service, debounce, timeout] in
             // Unlike the stop search, this one costs a round trip to Apple, so it waits until
             // the typing stops. 300 ms is the usual "finished a word" pause: shorter fires
             // mid-word, longer feels like the list has got stuck.
             try? await Task.sleep(for: debounce)
             guard !Task.isCancelled else { return }
-            let found = await service.suggestions(for: trimmed)
+            // H-16: nothing upstream ever times out the completer on its own — no network,
+            // or an Apple throttle that never calls the delegate back, left `isSearching`
+            // true forever, with no way out except typing something new. Racing the real
+            // call against a generous ceiling turns that silent hang into a stated failure.
+            let found = await Self.withTimeout(timeout) { await service.suggestions(for: trimmed) }
             guard !Task.isCancelled, let self else { return }
-            self.suggestions = found
             self.isSearching = false
+            if let found {
+                self.suggestions = found
+            } else {
+                self.suggestions = []
+                self.failed = true
+                self.failure = .unavailable
+            }
+        }
+    }
+
+    /// Races `operation` against `duration`; `nil` means the timeout won rather than
+    /// `operation` returning.
+    ///
+    /// Not `withTaskGroup`: its children must be `@Sendable`, which would force `service` —
+    /// deliberately *not* `Sendable`, per `AddressSearching`'s own doc comment, because the
+    /// only real implementation is bound to a main-thread delegate API — across an actor
+    /// boundary it was built never to cross. `operation` is typed `@MainActor` instead, so
+    /// the closure that calls it can capture `service` exactly as the caller already does.
+    /// Two ordinary `Task`s inherit that same main-actor isolation from this method (a static
+    /// member of a `@MainActor` class), and `resumed` — read and written only on the main
+    /// actor — is enough to resume the continuation exactly once. The losing task is left to
+    /// finish on its own: for the timeout branch that is a `Task.sleep` with nothing to clean
+    /// up, and for `operation` that is `service.suggestions(for:)`, whose own next call
+    /// already retires whatever the previous one left waiting (`resumePending(with: [])` in
+    /// `MapKitAddressSearchService`).
+    private static func withTimeout<T: Sendable>(
+        _ duration: Duration, operation: @MainActor @escaping () async -> T
+    ) async -> T? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            var resumed = false
+            Task {
+                let result = await operation()
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: result)
+            }
+            Task {
+                try? await Task.sleep(for: duration)
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: nil)
+            }
         }
     }
 
