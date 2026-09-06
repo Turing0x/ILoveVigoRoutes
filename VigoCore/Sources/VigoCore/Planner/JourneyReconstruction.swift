@@ -187,11 +187,27 @@ public enum JourneyReconstruction {
         origin: Place, destination: Place, options: PlannerOptions, walk: WalkModel
     ) -> Journey? {
         // MARK: walk the parents back to the access leg
+        //
+        // A `.walk(from: S)` step was computed from S's *ride* in this round (the snapshot
+        // `RaptorEngine.run` takes before its footpath loop can overwrite anything), so it
+        // is `result.rideParent`, not `result.parent`, that has to be read for S — its
+        // current `parent` may since have been rewritten by an incoming walk of its own.
+        // Reading the wrong one chains footpaths that the engine never actually chained.
         var chain: [Step] = []
         var currentRound = round
         var stop = egressStop
-        while let parent = result.parent(round: currentRound, stop: stop) {
+        var stepFollowedAWalk = false
+        // No legitimate chain revisits a (round, stop) pair, so this bounds the walk even
+        // if two parents ever pointed at each other — a cycle the loop below has no other
+        // way to notice, since a `.walk` step does not advance `currentRound`.
+        var stepsRemaining = (result.roundsRun + 2) * result.stopCount
+        while let parent = stepFollowedAWalk
+                ? result.rideParent(round: currentRound, stop: stop)
+                : result.parent(round: currentRound, stop: stop) {
+            guard stepsRemaining > 0 else { return nil }
+            stepsRemaining -= 1
             chain.append(Step(stop: stop, parent: parent))
+            stepFollowedAWalk = false
             switch parent {
             case .access:
                 currentRound = -1
@@ -200,6 +216,7 @@ public enum JourneyReconstruction {
                 currentRound -= 1
             case .walk(let from, _):
                 stop = Int(from)
+                stepFollowedAWalk = true
             }
             if currentRound < 0 { break }
         }
@@ -296,8 +313,20 @@ public enum JourneyReconstruction {
                           seconds: Int(egressSeconds), metres: walk.metres(forSeconds: Int(egressSeconds))))
 
         let lastRide = rides[rides.count - 1]
-        let networkArrival = timetable.arrival(pattern: lastRide.pattern, trip: lastRide.trip,
+        var networkArrival = timetable.arrival(pattern: lastRide.pattern, trip: lastRide.trip,
                                                position: lastRide.alightPosition)
+        // The chain can end with a transfer walk when the chosen egress stop is one hop
+        // from where the last vehicle actually lets the passenger off — `egressStop` and
+        // the last ride's own alighting stop are not always the same stop. Every walking
+        // step after the last ride is on the way to the door, and has to be counted:
+        // leaving it out understates the arrival by exactly that walk, which is otherwise
+        // invisible because the leg list drawn from `legs` already includes it.
+        if let lastRideIndex = chain.lastIndex(where: {
+            if case .ride = $0.parent { return true }; return false }) {
+            for step in chain[(lastRideIndex + 1)...] {
+                if case .walk(_, let seconds) = step.parent { networkArrival &+= seconds }
+            }
+        }
         return Journey(
             legs: legs,
             departure: timetable.date(forAxisSeconds: Int(accessDeparture)),

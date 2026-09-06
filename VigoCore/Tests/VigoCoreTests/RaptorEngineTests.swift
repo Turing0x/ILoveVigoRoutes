@@ -164,6 +164,62 @@ struct RaptorEngineTests {
         }
     }
 
+    /// Two independent lines each ending a stop apart, joined by a footpath: S1 (line L1,
+    /// arrives 09:10) and S2 (line L2, arrives 09:20). The 120 s footpath from S1 beats S2's
+    /// own ride, so the walk-relaxation loop overwrites S2's `arrival` *and* its `parent` to
+    /// say it was walked into from S1 — correctly, for the arrival, since 09:12 really is
+    /// reachable that way. But `rideParent` has to remember S2's own ride (L2) regardless,
+    /// because a footpath *out* of S2 later that round is computed from that ride's time
+    /// (`rideArrival`, snapshotted before the overwrite) — and following the wrong parent
+    /// back would attribute that walk to the wrong line entirely.
+    private static func rideOverwrittenByWalkTimetable()
+        -> (timetable: Timetable, s0: Int, s1: Int, s2: Int, s4: Int) {
+        let stops = [
+            PlannerFixture.stop("RP0", name: "S0"), PlannerFixture.stop("RP1", name: "S1"),
+            PlannerFixture.stop("RP2", name: "S2"), PlannerFixture.stop("RP4", name: "S4"),
+        ]
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 2, 4], patternStops: [0, 1, 3, 2],
+            patternTripsOffset: [0, 1, 2],
+            tripRefs: [
+                TripRef(tripID: TripID("L1#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+                TripRef(tripID: TripID("L2#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0, 2],
+            tripArrival: [T.at(9, 0), T.at(9, 10), T.at(9, 0), T.at(9, 20)],
+            tripDeparture: [T.at(9, 0), T.at(9, 10), T.at(9, 0), T.at(9, 20)],
+            patternRouteID: [RouteID("RL1"), RouteID("RL2")], patternRouteShortName: ["L1", "L2"],
+            stopPatternsOffset: [0, 1, 2, 3, 4],
+            stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 1, 0],
+            footpathOffset: [0, 0, 1, 2, 2], footpathTarget: [2, 1], footpathSeconds: [120, 120],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2, 3)
+    }
+
+    @Test("A ride's parent survives being overwritten by an incoming walk")
+    func rideParentSurvivesIncomingWalk() throws {
+        let (timetable, s0, s1, s2, s4) = Self.rideOverwrittenByWalkTimetable()
+        let result = RaptorEngine().run(timetable, RaptorQuery(
+            access: [StopWalk(stop: Int32(s0), seconds: 0), StopWalk(stop: Int32(s4), seconds: 0)],
+            egress: [], departure: T.at(9, 0), horizon: 3 * 3_600))
+
+        #expect(result.arrival(round: 1, stop: s2) == T.at(9, 12),
+                "S1's ride (09:10) plus the 120 s footpath beats S2's own ride (09:20)")
+        #expect(result.parent(round: 1, stop: s2) == .walk(from: Int32(s1), seconds: 120))
+
+        guard case .ride(let pattern, _, _, _)? = result.rideParent(round: 1, stop: s2) else {
+            Issue.record("expected S2's own ride to survive as rideParent"); return
+        }
+        #expect(timetable.patternRouteShortName[Int(pattern)] == "L2")
+    }
+
     // MARK: - Bounds
 
     @Test("Nothing outside the horizon is reached")

@@ -22,6 +22,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
+| **Auditoría del motor RAPTOR** | 🟡 Tanda 1 hecha (las horas que se enseñan eran falsas). 2–4 en `AUDITORIA-RAPTOR.md` |
 
 ---
 
@@ -1918,3 +1919,72 @@ consecuencia de H-33 y no un hallazgo aparte — arreglado H-33 en la Tanda B, d
 Cifras finales: **359 tests en `VigoCore`** (321 antes de esta auditoría, +38), **18 en el
 target de app** (16 antes, +2). Ninguna de las cuatro tandas se ha comprobado en dispositivo
 — pendiente del propietario, con la lista concreta de qué probar en cada sección de arriba.
+
+## Auditoría del motor RAPTOR — Tanda 1: las horas que se enseñan eran falsas
+
+`AUDITORIA-RAPTOR.md` (2026-09-06) auditó el motor entero — RAPTOR, la reconstrucción, la
+selección y el orden de alternativas — contra el feed real, 20.000 instancias aleatorias y
+19 mutaciones deliberadas. Encontró que el núcleo del algoritmo está limpio (0 discrepancias
+contra una referencia exhaustiva cuando su precondición se cumple) pero que la
+**reconstrucción** produce horas equivocadas en la mayoría de las alternativas del feed real.
+Esta es la primera de las cuatro tandas que el informe propone: corrige H-01, H-02 y H-06,
+los tres hallazgos críticos/medios que comparten fichero y causa.
+
+**H-02 — la causa raíz.** `RaptorEngine.run` fotografiaba el *valor* de la llegada en bus de
+cada parada (`rideArrival`) antes de que el bucle de relajación de caminatas pudiera
+sobrescribirlo — la protección que el paso 4/11 de la Fase 3 ya documenta — pero **no
+fotografiaba su `parent`**. Si una parada X, recién alcanzada en bus, recibía además una
+caminata entrante de otra parada más rápida en la misma ronda, su `parent` pasaba a decir
+"llegué andando desde esa otra parada", aunque el valor que después salía de X hacia una
+tercera parada siguiera siendo el de su propio autobús. Seguir ese `parent` hacia atrás
+reconstruía una línea distinta, con hasta cuatro caminatas encadenadas y una hora equivocada
+— el mismo agujero de "un salto a pie por ronda" del paso 4/11, reabierto un nivel más abajo.
+Arreglado con un segundo array, `RaptorResult.rideParent`, fotografiado en el mismo momento
+que `rideArrival`: `JourneyReconstruction.reconstruct` ahora sigue `rideParent` (no `parent`)
+para la parada origen de cualquier paso `.walk`, que es exactamente la que el bucle de
+relajación usó como fuente.
+
+**H-01 — la consecuencia visible.** `Journey.arrival` tomaba la llegada del último tramo en
+bus y le sumaba solo la caminata de salida, saltándose cualquier caminata de transbordo
+intermedia entre el último bus y la parada de bajada elegida. Contra el feed real afectaba al
+**71,6 % de las alternativas** (1.966 de 2.746 medidas), con un error máximo de **1.071 s
+(17 min 51 s)** — la hora grande de la ficha contradecía la suma de sus propios tramos.
+Arreglado sumando toda caminata posterior al último `.ride` de la cadena, no solo la última.
+
+**H-06 — la guarda que faltaba.** El recorrido de los `parent`/`rideParent` hacia atrás no
+tenía cota: un paso `.walk` no avanza de ronda, así que dos paradas que (por la razón que
+fuera) se apuntaran mutuamente como origen entrarían en un bucle infinito. Hoy es inalcanzable
+por construcción — `rideParent` solo puede contener un `.ride`, nunca un `.walk` — pero esa
+garantía vivía solo en la cabeza de quien escribió el código, no en ninguna comprobación.
+Añadida una cota de `(roundsRun + 2) × stopCount` pasos, que ningún trayecto real puede
+agotar.
+
+**Verificado por mutación, las cuatro correcciones.** Revertir `JourneyReconstruction.swift`
+a su versión anterior (con `RaptorEngine.swift` ya arreglado) tumba los dos tests nuevos que
+prueban H-01 y H-02, con los valores exactos que el análisis predice (línea equivocada,
+parada equivocada, llegada equivocada). Quitar solo la foto de `rideParent` en
+`RaptorEngine.swift` (dejando el resto del arreglo) tumba el test que prueba directamente esa
+foto. Quitar solo la cota de pasos de H-06 cuelga la suite entera — comprobado con un límite
+de tiempo del propio arnés de pruebas, no con `.timeLimit` de Swift Testing: un bucle
+síncrono sin puntos de suspensión no es interrumpible por ese mecanismo, así que el test de
+H-06 no lo usa y confía por completo en la cota de producción para terminar.
+
+**Verificación.** Suite de `VigoCore`: **363 tests en verde** (359 antes de esta tanda, +4).
+Contra el feed real (`VIGO_GTFS_ZIP`): la suite de integración y de tiempos pasa entera
+(11 tests), con la planificación en frío en 130 ms, dentro del presupuesto de 1 s.
+
+**Test nuevos:**
+- `RaptorEngineTests.rideParentSurvivesIncomingWalk` — la foto de `rideParent` sobrevive a
+  que una caminata entrante reescriba `parent` en la misma ronda.
+- `JourneyReconstructionTests.trailingWalkCountsTowardArrival` — H-01: una caminata de
+  transbordo después del último bus cuenta en `Journey.arrival`.
+- `JourneyReconstructionTests.rideSurvivesAWalkThatOverwritesItsParent` — H-02, extremo a
+  extremo: con dos líneas independientes y una caminata que sobrescribe el `parent` de la
+  parada intermedia, la alternativa reconstruida usa la línea, la parada de embarque, el
+  tramo a pie y la llegada correctos — no los de la línea que corrompió el puntero.
+- `JourneyReconstructionTests.walkCycleTerminates` — H-06: un `RaptorResult` fabricado a
+  mano con `parent`/`rideParent` mutuamente cíclicos no cuelga la reconstrucción.
+
+**Pendiente de esta auditoría:** Tandas 2 (H-03/H-04/H-05, el criterio por defecto elige de
+un conjunto que no lo contiene), 3 (H-07/H-08/H-09, cerrar los huecos de mutación) y 4
+(H-10 a H-19, deuda y precisión) — todas en `AUDITORIA-RAPTOR.md` §8.

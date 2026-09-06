@@ -222,6 +222,165 @@ struct JourneyReconstructionTests {
         #expect(timetable.axisSeconds(for: journey.arrival) == Int(T.at(8, 40)), "arrival is unchanged")
     }
 
+    // MARK: - A chain that ends on foot (Auditoría RAPTOR, Tanda 1: H-01, H-02, H-06)
+
+    /// One ride, then a single transfer walk to the egress stop: the smallest network where
+    /// the chosen way out is a hop away from where the vehicle actually alights, so the
+    /// chain ends on foot rather than at a stop the ride itself served.
+    private static func trailingWalkTimetable() -> (timetable: Timetable, r0: Int, r1: Int, r2: Int) {
+        let stops = [
+            PlannerFixture.stop("TW0", name: "R0"), PlannerFixture.stop("TW1", name: "R1"),
+            PlannerFixture.stop("TW2", name: "R2"),
+        ]
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 2], patternStops: [0, 1],
+            patternTripsOffset: [0, 1],
+            tripRefs: [TripRef(tripID: TripID("L1#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                               dayOffsetSeconds: 0, headsign: nil)],
+            patternTimesOffset: [0],
+            tripArrival: [T.at(9, 0), T.at(9, 10)], tripDeparture: [T.at(9, 0), T.at(9, 10)],
+            patternRouteID: [RouteID("RL1")], patternRouteShortName: ["L1"],
+            stopPatternsOffset: [0, 1, 2, 2],
+            stopPatternPattern: [0, 0], stopPatternPosition: [0, 1],
+            footpathOffset: [0, 0, 1, 2], footpathTarget: [2, 1], footpathSeconds: [120, 120],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2)
+    }
+
+    /// H-01: `Journey.arrival` was the last ride's own arrival plus the egress walk only,
+    /// silently dropping any transfer walk in between — understating the headline time by
+    /// exactly that walk while the leg list underneath it kept showing the full one.
+    @Test("A trailing transfer walk after the last ride counts toward the arrival")
+    func trailingWalkCountsTowardArrival() throws {
+        let (timetable, r0, _, r2) = Self.trailingWalkTimetable()
+        let query = RaptorQuery(access: [StopWalk(stop: Int32(r0), seconds: 0)],
+                                egress: [StopWalk(stop: Int32(r2), seconds: 60)],
+                                departure: T.at(9, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine().run(timetable, query)
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: PlannerOptions())
+
+        #expect(journeys.count == 1)
+        guard let journey = journeys.first else { return }
+        #expect(journey.legs.count == 4, "walk in, ride, transfer walk, walk out")
+        #expect(journey.arrival == timetable.date(forAxisSeconds: Int(T.at(9, 10)) + 120 + 60),
+                "the ride's own 09:10 plus the 120 s transfer walk its legs already show, plus the 60 s egress walk")
+    }
+
+    /// Two independent lines feeding a chain of two footpaths, with the second line's own
+    /// ride beaten by a walk from the first. L1: S0 → S1 (arrives 09:10). L2: S4 → S2
+    /// (arrives 09:20). S1↔S2 is a 120 s footpath, S2↔S3 a 60 s one. S1's ride beats S2's
+    /// own by more than the 120 s footpath costs, so the walk-relaxation loop overwrites
+    /// S2's `parent` to say it was walked into from S1 — a real, valid arrival on its own,
+    /// just not the one that goes on to reach S3. The walk out of S2 that reaches S3 is
+    /// computed from S2's *ride* (09:20 + 60 s = 09:21), and following the wrong parent back
+    /// from S3 would report the journey as L1 plus a two-footpath hike through S1, when the
+    /// engine only ever walked once.
+    private static func rideOverwrittenByWalkTimetable()
+        -> (timetable: Timetable, s0: Int, s1: Int, s2: Int, s3: Int, s4: Int) {
+        let stops = [
+            PlannerFixture.stop("RB0", name: "S0"), PlannerFixture.stop("RB1", name: "S1"),
+            PlannerFixture.stop("RB2", name: "S2"), PlannerFixture.stop("RB3", name: "S3"),
+            PlannerFixture.stop("RB4", name: "S4"),
+        ]
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 2, 4], patternStops: [0, 1, 4, 2],
+            patternTripsOffset: [0, 1, 2],
+            tripRefs: [
+                TripRef(tripID: TripID("L1#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+                TripRef(tripID: TripID("L2#0"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0, 2],
+            tripArrival: [T.at(9, 0), T.at(9, 10), T.at(9, 0), T.at(9, 20)],
+            tripDeparture: [T.at(9, 0), T.at(9, 10), T.at(9, 0), T.at(9, 20)],
+            patternRouteID: [RouteID("RL1"), RouteID("RL2")], patternRouteShortName: ["L1", "L2"],
+            stopPatternsOffset: [0, 1, 2, 3, 3, 4],
+            stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 1, 0],
+            footpathOffset: [0, 0, 1, 3, 4, 4],
+            footpathTarget: [2, 1, 3, 2], footpathSeconds: [120, 120, 60, 60],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2, 3, 4)
+    }
+
+    /// H-02: reconstruction followed a stop's *current* `parent`, which a later footpath in
+    /// the same round can overwrite, instead of the `rideParent` snapshot that survives it.
+    @Test("Reconstruction follows the ride RAPTOR took, not whatever last overwrote a stop's parent")
+    func rideSurvivesAWalkThatOverwritesItsParent() throws {
+        let (timetable, s0, _, _, s3, s4) = Self.rideOverwrittenByWalkTimetable()
+        let query = RaptorQuery(
+            access: [StopWalk(stop: Int32(s0), seconds: 0), StopWalk(stop: Int32(s4), seconds: 0)],
+            egress: [StopWalk(stop: Int32(s3), seconds: 30)],
+            departure: T.at(9, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine().run(timetable, query)
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: PlannerOptions())
+
+        #expect(journeys.count == 1)
+        guard let journey = journeys.first else { return }
+        #expect(journey.legs.count == 4, "walk in, one ride, one transfer walk, one egress walk")
+
+        guard case .ride(_, let shortName, _, _, let board, _, _, _, _) = journey.legs[1] else {
+            Issue.record("expected a single ride"); return
+        }
+        #expect(shortName == "L2", "the ride that actually reaches S2, not L1 via the overwritten parent")
+        #expect(board.id == StopID("RB4"), "boards where L2 boards — not S0, L1's stop")
+
+        guard case .walk(let from, let to, let seconds, _) = journey.legs[2] else {
+            Issue.record("expected a single transfer walk"); return
+        }
+        guard case .stop(let fromStop) = from, case .stop(let toStop) = to else {
+            Issue.record("both ends of the transfer walk are stops"); return
+        }
+        #expect(fromStop.id == StopID("RB2"), "walks from S2, its real ride's stop — not from S1")
+        #expect(toStop.id == StopID("RB3"))
+        #expect(seconds == 60, "one hop, not a chain through S1")
+
+        #expect(journey.arrival == timetable.date(forAxisSeconds: Int(T.at(9, 20)) + 60 + 30),
+                "S2's own ride (09:20) plus the transfer and egress walks — S1's ride plays no part")
+    }
+
+    /// H-06: the backward walk over `parent`/`rideParent` had no bound of its own — a
+    /// `.walk` step never advances `currentRound`, so nothing but such a bound stops two
+    /// stops that (however it happened) each point at the other from looping forever. This
+    /// state cannot arise through `RaptorEngine.run` today — its `rideParent` snapshot only
+    /// ever holds a `.ride` — but `reconstruct` has to survive it regardless of how it got
+    /// there, which is why the `RaptorResult` here is fabricated by hand rather than run.
+    @Test("A cycle of mutual walk parents does not loop forever")
+    func walkCycleTerminates() throws {
+        let stopCount = 3
+        var arrival = [Int32](repeating: RaptorResult.unreached, count: 2 * stopCount)
+        var parent = [RaptorParent?](repeating: nil, count: 2 * stopCount)
+        arrival[0] = 0
+        parent[0] = .access(seconds: 0)
+        arrival[stopCount + 1] = 600
+        parent[stopCount + 1] = .walk(from: 2, seconds: 0)
+        arrival[stopCount + 2] = 600
+        parent[stopCount + 2] = .walk(from: 1, seconds: 0)
+        let result = RaptorResult(stopCount: stopCount, roundsRun: 1, arrival: arrival,
+                                  parent: parent, bestArrival: [0, 600, 600], rideParent: parent)
+        let query = RaptorQuery(access: [StopWalk(stop: 0, seconds: 0)],
+                                egress: [StopWalk(stop: 2, seconds: 30)], departure: 0, horizon: 10_800)
+
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: try Network().timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: PlannerOptions())
+        #expect(journeys.isEmpty, "a cyclic parent graph describes no real journey")
+    }
+
     // MARK: - Alternative selection
 
     /// Two independent one-vehicle routes to the same destination: a direct one and a

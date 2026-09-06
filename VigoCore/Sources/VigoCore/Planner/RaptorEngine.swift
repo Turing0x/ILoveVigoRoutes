@@ -54,6 +54,13 @@ public struct RaptorResult: Sendable {
     public let parent: [RaptorParent?]
     /// The best arrival at each stop over all rounds. This is what target pruning uses.
     public let bestArrival: [Int32]
+    /// The `parent` a ridden stop had at the moment its ride arrival was fixed for this
+    /// round — before the same round's footpath relaxation could overwrite it.
+    ///
+    /// `JourneyReconstruction` needs this alongside `parent`: a `.walk(from: S)` label was
+    /// computed from `S`'s ride, using the value this array (not `parent`) still remembers.
+    /// See the note on the `rideArrival` snapshot in `RaptorEngine.run`.
+    public let rideParent: [RaptorParent?]
 
     @inlinable public func arrival(round: Int, stop: Int) -> Int32? {
         let value = arrival[round * stopCount + stop]
@@ -62,6 +69,10 @@ public struct RaptorResult: Sendable {
 
     @inlinable public func parent(round: Int, stop: Int) -> RaptorParent? {
         parent[round * stopCount + stop]
+    }
+
+    @inlinable public func rideParent(round: Int, stop: Int) -> RaptorParent? {
+        rideParent[round * stopCount + stop]
     }
 }
 
@@ -91,6 +102,7 @@ public struct RaptorEngine: Sendable {
 
         var arrival = [Int32](repeating: unreached, count: (rounds + 1) * stopCount)
         var parent = [RaptorParent?](repeating: nil, count: (rounds + 1) * stopCount)
+        var rideParent = [RaptorParent?](repeating: nil, count: (rounds + 1) * stopCount)
         var bestArrival = [Int32](repeating: unreached, count: stopCount)
         // When a stop can be boarded, given the round it was reached in. Distinct from the
         // arrival label because a transfer costs slack that riding on does not.
@@ -194,14 +206,26 @@ public struct RaptorEngine: Sendable {
             // triangle inequality, so chaining them can never beat the direct walk, and
             // capping it at one hop keeps a transfer from silently becoming a 900 m hike.
             //
-            // The ride arrivals are snapshotted before this loop writes anything: a walk
-            // into stop X can land before X's own turn as a source comes up (X is in
-            // `riddenStops` too, just later in the list), and reading `arrival[base + X]`
-            // live at that point would pick up the walk's result instead of the ride's —
-            // turning "one hop" into two chained ones without either loop noticing.
+            // The ride arrivals — and their parents — are snapshotted before this loop
+            // writes anything: a walk into stop X can land before X's own turn as a source
+            // comes up (X is in `riddenStops` too, just later in the list), and reading
+            // `arrival[base + X]` live at that point would pick up the walk's result
+            // instead of the ride's — turning "one hop" into two chained ones without
+            // either loop noticing.
+            //
+            // The parent needs the same snapshot as the value, not just the value: once a
+            // walk into X rewrites `parent[base + X]` to `.walk(from: ...)`, a later
+            // outgoing walk that reads `rideArrival[X]` (X's ride, correctly) would still
+            // chain onto X's now-overwritten `.walk` parent when the chain is later walked
+            // backwards — two footpaths presented as one. `rideParent` is what
+            // `JourneyReconstruction` follows instead, for exactly the stops this loop
+            // uses as a walk source.
             var rideArrival: [Int: Int32] = [:]
             rideArrival.reserveCapacity(riddenStops.count)
-            for stop in riddenStops { rideArrival[stop] = arrival[base + stop] }
+            for stop in riddenStops {
+                rideArrival[stop] = arrival[base + stop]
+                rideParent[base + stop] = parent[base + stop]
+            }
 
             for stop in riddenStops {
                 let from = rideArrival[stop]!
@@ -227,7 +251,8 @@ public struct RaptorEngine: Sendable {
         }
 
         return RaptorResult(stopCount: stopCount, roundsRun: roundsRun,
-                            arrival: arrival, parent: parent, bestArrival: bestArrival)
+                            arrival: arrival, parent: parent, bestArrival: bestArrival,
+                            rideParent: rideParent)
     }
 
     /// The earliest the destination can be reached from anything found so far. Every label
