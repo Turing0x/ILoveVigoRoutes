@@ -155,7 +155,7 @@ public struct JourneyPlanner: Sendable {
                                departure: departure, deadline: deadline, query: query)
             guard !batch.isEmpty else { break }
             collected.append(contentsOf: batch)
-            guard ranked(collected).count < options.maxAlternatives,
+            guard ranked(collected).count < options.maxCandidates,
                   let boarding = firstBoardingSeconds(of: batch, timetable: timetable)
             else { break }
             departure = boarding &+ 1
@@ -190,32 +190,13 @@ public struct JourneyPlanner: Sendable {
         return earliest
     }
 
-    /// Turns everything collected into the shortlist actually worth showing: no duplicates,
-    /// no dominated options, soonest arrival first.
-    ///
-    /// A journey dominates another when it leaves no earlier (less waiting), arrives no
-    /// later, and asks for no more transfers, while being strictly better in at least one of
-    /// the three. Journeys that tie on all three — a different line at the same times — are
-    /// both kept: neither is worse, and the pair is a genuine choice.
+    /// Turns everything collected into the pool actually worth offering: no duplicates, no
+    /// dominated options, soonest arrival first.
     private func ranked(_ journeys: [Journey]) -> [Journey] {
         var seen = Set<Journey>()
         var unique: [Journey] = []
         for journey in journeys where seen.insert(journey).inserted { unique.append(journey) }
-
-        func dominates(_ a: Journey, _ b: Journey) -> Bool {
-            guard a.departure >= b.departure, a.arrival <= b.arrival,
-                  a.transfers <= b.transfers else { return false }
-            return a.departure > b.departure || a.arrival < b.arrival || a.transfers < b.transfers
-        }
-
-        let kept = unique.filter { candidate in
-            !unique.contains { dominates($0, candidate) }
-        }
-        let sorted = kept.sorted { first, second in
-            first.arrival == second.arrival
-                ? first.departure > second.departure
-                : first.arrival < second.arrival
-        }
-        return Array(sorted.prefix(options.maxAlternatives))
+        return JourneyShortlist.cut(JourneyShortlist.undominated(unique),
+                                    to: options.maxCandidates)
     }
 }

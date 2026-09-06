@@ -192,8 +192,12 @@ struct MapScreen: View {
             //
             // Hangs off the answer and not off what is drawn, so the annotations are asked for
             // as soon as the planner replies, without waiting on the shape reads.
-            .onChange(of: model.state.route.journeys) { _, journeys in
-                live?.refresh(for: journeys)
+            .onChange(of: model.state.route.journeys) { _, _ in
+                // For the visible ones, not the whole pool: the planner now hands back more
+                // candidates than fit on screen so the ordering can choose among them, and
+                // asking the realtime source about journeys nobody is looking at would be
+                // exactly the polling §8 of the handoff rules out.
+                live?.refresh(for: model.state.visibleJourneys)
             }
             // Framing follows the answer, not the question: as soon as there are routes, the
             // camera opens on all of them rather than staying on the destination pin.
@@ -260,6 +264,7 @@ struct MapScreen: View {
                 },
                 onSwap: { Task { await model.swapEnds() } },
                 onDeparture: { departure in Task { await model.setDeparture(departure) } },
+                onOrdering: { model.ordering = $0 },
                 onRefresh: { await model.refresh() },
                 onSelect: { model.selectAlternative(at: $0) },
                 onOpen: { model.openSelectedAlternative() },

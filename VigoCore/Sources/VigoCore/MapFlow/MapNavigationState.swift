@@ -85,6 +85,13 @@ public struct MapNavigationState: Sendable {
     /// Which alternative is highlighted on the map and in the list. Always a valid index
     /// into `route.journeys` when there are any, `0` otherwise.
     public private(set) var selectedAlternative = 0
+
+    /// How the alternatives are ordered for the person reading them.
+    ///
+    /// Presentation, never a new question: changing it reorders journeys already computed and
+    /// never re-plans. A tap on the menu that cost four RAPTOR passes and up to sixteen
+    /// `shapePoint` reads would be a very expensive way to sort a list of four.
+    public private(set) var ordering: JourneyOrdering = .default
     public var departure: Departure = .now
 
     /// True while the origin is still whatever the device last reported.
@@ -277,7 +284,7 @@ public struct MapNavigationState: Sendable {
     // MARK: - Alternatives
 
     public mutating func selectAlternative(at index: Int) {
-        guard route.journeys.indices.contains(index) else { return }
+        guard visibleJourneys.indices.contains(index) else { return }
         guard index != selectedAlternative else { return }
         selectedAlternative = index
         // Following is about *this* journey. Highlighting another one and carrying the
@@ -285,8 +292,35 @@ public struct MapNavigationState: Sendable {
         isFollowing = false
     }
 
+    /// The alternatives actually shown, in the chosen order.
+    ///
+    /// The planner hands back a larger pool than fits on screen (`maxCandidates`), precisely so
+    /// that the criterion picked here decides which of them are seen. Cutting that pool any
+    /// earlier would choose the visible four by a criterion the user did not pick — which is
+    /// the whole failure mode Fase 10 exists to avoid.
+    public var visibleJourneys: [Journey] {
+        ordering.apply(route.journeys, limit: visibleLimit)
+    }
+
+    /// How many alternatives are shown at once. Mirrors `PlannerOptions.maxAlternatives`, which
+    /// the state has no reason to depend on the planner for.
+    public var visibleLimit = 4
+
+    /// Changes the criterion, and resets what was pointing at the old order.
+    ///
+    /// `selectedAlternative` is an index into `visibleJourneys`, so reordering silently makes
+    /// it point at a different journey: the map would highlight one route while the list
+    /// highlighted another. Back to the top, and following off — the same argument already
+    /// written into `selectAlternative(at:)`.
+    public mutating func setOrdering(_ ordering: JourneyOrdering) {
+        guard ordering != self.ordering else { return }
+        self.ordering = ordering
+        selectedAlternative = 0
+        isFollowing = false
+    }
+
     public var currentJourney: Journey? {
-        let journeys = route.journeys
+        let journeys = visibleJourneys
         guard journeys.indices.contains(selectedAlternative) else { return nil }
         return journeys[selectedAlternative]
     }

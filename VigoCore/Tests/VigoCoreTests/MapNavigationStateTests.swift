@@ -565,3 +565,114 @@ struct MapFollowingTests {
         #expect(state.mode == .browsing)
     }
 }
+
+/// El criterio de ordenación, dentro del flujo del mapa.
+///
+/// Vive aquí y no en `JourneyOrderingTests` porque lo que se prueba no es el orden —eso ya
+/// está probado allí— sino lo que el cambio de criterio le hace al resto del estado.
+@Suite("Orden de alternativas en el mapa")
+struct MapOrderingTests {
+
+    private let clock = Date(timeIntervalSince1970: 1_757_000_000)
+    private let here = Coordinate(latitude: 42.2328, longitude: -8.7226)
+    private let there = Coordinate(latitude: 42.2400, longitude: -8.7100)
+
+    /// Un trayecto en autobús con la caminata final que se le pida.
+    private func journey(board: Double, arrive: Double, egress: Int, line: String) -> Journey {
+        let a = PlannerFixture.stop("A\(line)")
+        let b = PlannerFixture.stop("B\(line)", northMetres: 1_000)
+        return Journey(legs: [
+            .walk(from: .coordinate(here, label: "O"), to: .stop(a), seconds: 120, metres: 150),
+            .ride(routeID: RouteID("r\(line)"), routeShortName: line, headsign: nil,
+                  tripID: TripID("t\(line)"), board: a, alight: b,
+                  departure: clock.addingTimeInterval(board * 60),
+                  arrival: clock.addingTimeInterval(arrive * 60 - Double(egress)),
+                  intermediateStops: []),
+            .walk(from: .stop(b), to: .coordinate(there, label: "D"),
+                  seconds: egress, metres: Double(egress))
+        ], departure: clock.addingTimeInterval(board * 60 - 120),
+           arrival: clock.addingTimeInterval(arrive * 60), transfers: 0)
+    }
+
+    private func planned(_ journeys: [Journey]) -> MapNavigationState {
+        var state = MapNavigationState()
+        state.select(MapPlace(place: .coordinate(there, label: "Destino"), subtitle: nil,
+                              origin: .droppedPin))
+        state.updateCurrentLocation(here)
+        _ = state.routeToSelectedPlace()
+        state.planningStarted()
+        state.planningFinished(.journeys(journeys))
+        return state
+    }
+
+    @Test("Por defecto se ordena por la caminata final")
+    func defaultIsLeastWalk() throws {
+        let rapido = journey(board: 2, arrive: 20, egress: 900, line: "R")
+        let cercano = journey(board: 5, arrive: 26, egress: 60, line: "C")
+        let state = planned([rapido, cercano])
+
+        #expect(state.ordering == .leastWalkAtEnd)
+        #expect(state.visibleJourneys.first == cercano)
+        #expect(state.currentJourney == cercano)
+    }
+
+    @Test("Cambiar de criterio reordena lo visible sin volver a planificar")
+    func changingTheCriterionReorders() throws {
+        let rapido = journey(board: 2, arrive: 20, egress: 900, line: "R")
+        let cercano = journey(board: 5, arrive: 26, egress: 60, line: "C")
+        var state = planned([rapido, cercano])
+
+        state.setOrdering(.earliestArrival)
+        #expect(state.visibleJourneys.first == rapido)
+        #expect(state.route.journeys.count == 2, "el conjunto planificado no se toca")
+    }
+
+    /// `selectedAlternative` es un índice sobre la lista **visible**, así que reordenar sin
+    /// resetearlo deja el mapa resaltando una ruta y la lista otra.
+    @Test("Cambiar de criterio vuelve a la primera y apaga el seguimiento")
+    func changingTheCriterionResetsSelection() throws {
+        let a = journey(board: 2, arrive: 20, egress: 900, line: "A")
+        let b = journey(board: 5, arrive: 26, egress: 60, line: "B")
+        let c = journey(board: 9, arrive: 30, egress: 300, line: "C")
+        var state = planned([a, b, c])
+
+        state.selectAlternative(at: 2)
+        _ = state.openSelectedAlternative()
+        let following = state.startFollowing()
+        #expect(following)
+        #expect(state.selectedAlternative == 2)
+
+        state.setOrdering(.earliestBoarding)
+        #expect(state.selectedAlternative == 0)
+        #expect(state.isFollowing == false)
+    }
+
+    @Test("Elegir el mismo criterio que ya estaba no toca nada")
+    func settingTheSameCriterionIsANoOp() throws {
+        let a = journey(board: 2, arrive: 20, egress: 60, line: "A")
+        let b = journey(board: 5, arrive: 26, egress: 900, line: "B")
+        var state = planned([a, b])
+
+        state.selectAlternative(at: 1)
+        state.setOrdering(.leastWalkAtEnd)
+        #expect(state.selectedAlternative == 1, "no había nada que reordenar")
+    }
+
+    /// El planificador devuelve un conjunto mayor que el que cabe en pantalla justo para que
+    /// el criterio elija de él.
+    @Test("Solo se enseñan las que caben, elegidas por el criterio")
+    func visibleIsCappedButChosenByTheCriterion() throws {
+        var journeys: [Journey] = []
+        for index in 0..<8 {
+            // El que menos anda es el último por llegada.
+            journeys.append(journey(board: Double(index), arrive: Double(20 + index),
+                                    egress: index == 7 ? 30 : 600, line: "L\(index)"))
+        }
+        let state = planned(journeys)
+
+        #expect(state.route.journeys.count == 8)
+        #expect(state.visibleJourneys.count == 4)
+        #expect(state.visibleJourneys.first == journeys[7],
+                "el que menos anda entra aunque sea el último por llegada")
+    }
+}
