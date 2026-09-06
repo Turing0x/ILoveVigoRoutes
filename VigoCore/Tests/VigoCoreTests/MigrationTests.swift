@@ -56,4 +56,39 @@ struct MigrationTests {
         #expect(hasSavedPlace)
         #expect(hasSavedJourney)
     }
+
+    /// `v3` adds `activeJourney` and `recentSearch` together, on the owner's explicit call
+    /// not to chain a `v4` two weeks later — `recentSearch` stays empty until Fase 12.
+    @Test("v2 user data survives migrating to v3, and both new tables start empty")
+    func v2DataSurvivesToV3() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v2")
+
+        try queue.write { db in
+            try SavedPlaceRow(id: "p1", name: "Casa", symbolName: "house.fill", kind: "coordinate",
+                              stopID: nil, latitude: 42.2, longitude: -8.7,
+                              createdAt: Date(), sortIndex: 0).insert(db)
+        }
+
+        try AppDatabase.migrator.migrate(queue)
+
+        let savedPlaceCount = try queue.read { try SavedPlaceRow.fetchCount($0) }
+        let activeJourneyCount = try queue.read { try ActiveJourneyRow.fetchCount($0) }
+        #expect(savedPlaceCount == 1)
+        #expect(activeJourneyCount == 0)
+
+        let hasActiveJourney = try queue.read { try $0.tableExists("activeJourney") }
+        let hasRecentSearch = try queue.read { try $0.tableExists("recentSearch") }
+        #expect(hasActiveJourney)
+        #expect(hasRecentSearch)
+    }
+
+    @Test("A fresh database migrates straight to v3 with all tables present")
+    func freshDatabaseHasV3Tables() throws {
+        let db = try AppDatabase.inMemory()
+        let hasActiveJourney = try db.writer.read { try $0.tableExists("activeJourney") }
+        let hasRecentSearch = try db.writer.read { try $0.tableExists("recentSearch") }
+        #expect(hasActiveJourney)
+        #expect(hasRecentSearch)
+    }
 }

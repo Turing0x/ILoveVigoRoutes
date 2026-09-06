@@ -3,6 +3,7 @@ import VigoCore
 
 struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selection = AppTab.map
 
     enum AppTab: Hashable { case favourites, map }
@@ -22,6 +23,16 @@ struct RootView: View {
                 FavouritesView()
             }
         }
+        // Above the tab bar, not inside `MapScreen`: the requirement is that this stays
+        // visible across tabs, and `MapScreen`'s own `safeAreaInset` is scoped to Mapa alone.
+        .safeAreaInset(edge: .bottom) {
+            if let journey = environment.activeJourney.journey {
+                ActiveJourneyBar(
+                    journey: journey, staleness: environment.activeJourney.staleness,
+                    onExtend: { environment.activeJourney.extend() },
+                    onEnd: { environment.activeJourney.end() })
+            }
+        }
         .overlay(alignment: .bottom) {
             if environment.isRefreshing, !environment.hasData {
                 FirstImportOverlay()
@@ -31,6 +42,12 @@ struct RootView: View {
         // asking view keeps the tab selection in the one place that owns it.
         .onChange(of: environment.pendingSavedJourney) { _, journey in
             if journey != nil { selection = .map }
+        }
+        // A journey started before the phone went to sleep for two hours must not still
+        // read `.active` once the app comes back — staleness is only ever recomputed, never
+        // ticked on a timer nobody asked for.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { environment.activeJourney.reload() }
         }
     }
 }

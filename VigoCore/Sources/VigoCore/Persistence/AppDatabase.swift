@@ -178,6 +178,40 @@ public final class AppDatabase: Sendable {
                          columns: ["destinationPlaceID"])
         }
 
+        migrator.registerMigration("v3") { db in
+            // The active journey, and — created here in the same pass but unused until
+            // Fase 12 — recent searches. Both are new user data, both untouched by the
+            // importer, and both created together on the owner's explicit call not to chain
+            // a `v4` two weeks later over real data.
+            try db.create(table: "activeJourney") { t in
+                t.primaryKey("id", .text)
+                t.column("startedAt", .datetime).notNull()
+                t.column("state", .text).notNull()              // "active" | "stale"
+                t.column("destinationName", .text).notNull()
+                // No FK to `stop`, same reasoning as `savedPlace`: the importer clears and
+                // rewrites that table wholesale, and an FK would either cascade the active
+                // journey away or block the import outright.
+                t.column("destinationStopID", .text)
+                t.column("destinationLatitude", .double).notNull()
+                t.column("destinationLongitude", .double).notNull()
+                t.column("scheduledArrival", .datetime).notNull()
+                t.column("payload", .blob).notNull()            // JSON of ActiveJourneySnapshot
+            }
+
+            try db.create(table: "recentSearch") { t in
+                t.primaryKey("dedupKey", .text)
+                t.column("name", .text).notNull()
+                t.column("subtitle", .text)
+                t.column("symbolName", .text).notNull()
+                t.column("originKind", .text).notNull()         // "stop" | "address" | "poi" | "pin"
+                t.column("stopID", .text)
+                t.column("latitude", .double).notNull()
+                t.column("longitude", .double).notNull()
+                t.column("lastUsedAt", .datetime).notNull()
+            }
+            try db.create(index: "recentSearch_lastUsedAt", on: "recentSearch", columns: ["lastUsedAt"])
+        }
+
         return migrator
     }
 }
