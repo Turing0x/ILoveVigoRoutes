@@ -312,6 +312,7 @@ struct MapScreen: View {
                 failure: model.planningFailure,
                 plannedAt: model.plannedAt,
                 live: { live?.match(for: $0) },
+                liveAdjustment: { journey, now in live?.adjustment(for: journey, now: now) },
                 onPick: { role, place in
                     Task {
                         switch role {

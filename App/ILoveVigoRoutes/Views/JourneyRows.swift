@@ -21,6 +21,13 @@ struct JourneyAlternativeRow: View {
     /// is the one thing the list could not previously tell anyone.
     var hasDeparted = false
 
+    /// What the live countdown implies beyond itself (D1): a shifted arrival for a direct
+    /// journey, or a warning that a transfer may no longer connect.
+    ///
+    /// `nil` whenever the bus is running roughly to time, which is most of the time — so the
+    /// ordinary row is unchanged and the extra line means something when it appears.
+    var adjustment: LiveJourneyAdjustment.Adjustment? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -51,6 +58,25 @@ struct JourneyAlternativeRow: View {
                         .font(.caption2.monospacedDigit())
                 }
             }
+            // D1. What the countdown implies for the rest of the journey. Absent unless the
+            // bus is meaningfully off schedule, so the common case adds no chrome.
+            if let adjustment {
+                HStack(spacing: 6) {
+                    if adjustment.connectionAtRisk {
+                        Label(connectionWarning(adjustment), systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    } else if let arrival = adjustment.adjustedArrival {
+                        Text("llegarías \(arrival, style: .time) (\(delayText(adjustment)))")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(delayText(adjustment))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .padding(.vertical, 3)
         // `.combine` alone reads the stack as it happens to be laid out: two bare times, a
@@ -70,6 +96,22 @@ struct JourneyAlternativeRow: View {
 
     private var durationText: String {
         WaitTime(minutes: max(0, Int(journey.duration / 60))).inlineText
+    }
+
+    private func delayText(_ adjustment: LiveJourneyAdjustment.Adjustment) -> String {
+        let minutes = Int((abs(adjustment.delay) / 60).rounded())
+        return adjustment.delay > 0 ? "+\(minutes) min" : "−\(minutes) min"
+    }
+
+    /// Says which way the connection is going, because "puede que no llegues" and "no llegas"
+    /// are different facts and the user acts on them differently.
+    private func connectionWarning(_ adjustment: LiveJourneyAdjustment.Adjustment) -> String {
+        guard let slack = adjustment.worstConnectionSlack else { return "Transbordo en riesgo" }
+        let remaining = slack - adjustment.delay
+        if remaining < 0 {
+            return "Con este retraso pierdes el transbordo"
+        }
+        return "Transbordo justo: \(Int((remaining / 60).rounded())) min de margen"
     }
 
     private var transfersText: String {

@@ -14,6 +14,9 @@ struct MapRouteSheet: View {
     let plannedAt: Date?
     /// Live first-boarding annotations, keyed by journey. Empty is the normal case.
     let live: (Journey) -> Arrival?
+    /// What that countdown implies for the rest of the journey (D1). Takes the sheet's own
+    /// `now`, so the countdown and the arrival it implies are computed against one instant.
+    let liveAdjustment: (Journey, Date) -> LiveJourneyAdjustment.Adjustment?
     let onPick: (PlacePickerRole, MapPlace) -> Void
     let onSwap: () -> Void
     let onDeparture: (MapNavigationState.Departure) -> Void
@@ -220,7 +223,8 @@ struct MapRouteSheet: View {
                     } label: {
                         HStack(spacing: 10) {
                             JourneyAlternativeRow(journey: journey, live: live(journey),
-                                                  hasDeparted: gone)
+                                                  hasDeparted: gone,
+                                                  adjustment: liveAdjustment(journey, now))
                             if index == state.selectedAlternative {
                                 Image(systemName: "chevron.right")
                                     .font(.caption)

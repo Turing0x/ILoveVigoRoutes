@@ -516,7 +516,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | C1 · Coste generalizado en el corte | ✅ hecho | `c1` |
 | C2 · Rebarrido de salidas | ❌ **retirado — medido, no hacía falta** | — |
 | C3 · Modo silla de ruedas | ✅ hecho | `c3` |
-| D1 · Tiempo real en la primera pierna | pendiente | |
+| D1 · Tiempo real en la primera pierna | ✅ hecho (parcialmente ya existía) | `d1` |
 | B3 · MKDirections en acceso/egreso | pendiente | |
 | B4 · Radio en minutos | pendiente | |
 | Tests diferenciales contra OTP | pendiente | |
@@ -897,6 +897,51 @@ ruido del método de enganche, está documentado en el generador y el test lo co
 tolerancia explícita en vez de fingir que no ocurre.
 
 **Verificación.** 449 tests en 52 suites, verde. Ocho nuevos. La app compila.
+
+### D1 — Tiempo real en la primera pierna ✅
+
+**Corrección a la Fase 2.** Escribí que «tenemos `ConcelloRealtimeClient` y `ArrivalsService`
+pero `JourneyPlanner` no toca nada de eso». Lo primero es cierto y lo segundo también, pero la
+conclusión era falsa: miré sólo el planificador y me perdí `FirstBoardingMatch` y
+`FirstBoardingLive`. **La app ya anotaba el primer embarque con cuenta atrás real**, insignia
+de confianza (vehículo localizado frente a estimación del operador) y aviso de «Ya ha salido».
+Y con un diseño mejor que el que yo proponía: una petición por parada de embarque distinta, no
+por alternativa.
+
+Así que D1 se reduce al hueco que sí quedaba, y que es real: **ese retraso no llegaba a
+ninguna parte**. La fila seguía enseñando la hora de llegada del horario mientras la insignia
+de al lado decía que el autobús lleva ocho minutos de retraso. Los dos números no pueden ser
+ciertos a la vez, y el que el pasajero usa para decidir —¿llego a tiempo?— era el equivocado.
+
+`LiveJourneyAdjustment` cierra eso, con un límite honesto:
+
+| Trayecto | Qué se dice |
+|---|---|
+| Directo, autobús con retraso | **«llegarías 10:16 (+8 min)»** — el mismo autobús va tarde todo el viaje |
+| Con transbordo, margen suficiente | Sólo el retraso. **No se inventa hora de llegada** |
+| Con transbordo, el retraso se come el margen | **«Con este retraso pierdes el transbordo»** o «Transbordo justo: N min de margen» |
+
+**Por qué no se traslada el retraso a través de un transbordo.** Pasado el cambio de autobús la
+llegada no es «más tarde», es **desconocida**: o el enlace sigue funcionando y el resto va en
+hora, o no funciona y el siguiente vehículo puede estar veinte minutos por detrás. Dar una hora
+ahí sería inventarla.
+
+**El margen se calcula del propio trayecto, no de `PlannerOptions`.** El plan que está en
+pantalla es el que la persona va a seguir, y son sus horas las que deciden si aún se sostiene —
+no los mínimos de política que usó la búsqueda al construirlo. Y se le resta la caminata del
+transbordo: contar el hueco entero diría que hay cinco minutos de margen cuando cuatro se van
+andando entre andenes.
+
+**Umbral: dos minutos.** La fuente informa en minutos enteros y nuestras cifras de caminata son
+estimaciones; por debajo de eso todo está dentro del ruido de ambas, y un aviso que salta con
+el ruido es un aviso que nadie lee. En el caso normal la fila no cambia.
+
+**Lo que sigue sin hacerse, a propósito.** Nada de esto realimenta al planificador. El tiempo
+real **anota y nunca decide** — se decidió en la Fase 3 y sigue igual: la fuente no ve la red,
+sólo la parada donde está el pasajero, y una búsqueda medio informada por datos en vivo daría
+respuestas sobre las que nadie puede razonar.
+
+**Verificación.** 459 tests en 53 suites, verde. Diez nuevos. La app compila.
 
 ### B1 — Factores de detour asimétricos ✅
 

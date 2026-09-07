@@ -32,6 +32,17 @@ final class FirstBoardingLive {
         return matches[ride.board.id]
     }
 
+    /// What the live countdown implies beyond itself (D1), or `nil` when it implies nothing:
+    /// no match, or a bus running roughly to time.
+    ///
+    /// `now` is passed in so the whole row is drawn against one instant. Reading the clock
+    /// here and again in the view would let a row show a countdown and an implied arrival
+    /// computed a second apart, which is invisible until it straddles a minute boundary.
+    func adjustment(for journey: Journey, now: Date) -> LiveJourneyAdjustment.Adjustment? {
+        guard let live = match(for: journey) else { return nil }
+        return LiveJourneyAdjustment.adjust(journey, live: live, now: now)
+    }
+
     /// Looks up every distinct boarding stop among `journeys` and keeps the arrivals that
     /// match. Cancels whatever was in flight, so a stale result cannot land on a newer list.
     func refresh(for journeys: [Journey]) {
