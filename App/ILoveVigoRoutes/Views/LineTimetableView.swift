@@ -65,7 +65,16 @@ struct LineTimetableView: View {
         }
         .navigationTitle("Línea \(routeShortName)")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { dayPicker } }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink {
+                    LineTraceView(routeID: routeID, routeShortName: routeShortName)
+                } label: {
+                    Label("Ver trazado", systemImage: "map")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) { dayPicker }
+        }
         .task {
             // Settled before the keyed task below runs its first pass, so choosing the default
             // day does not count as a change of day and read the same table twice.

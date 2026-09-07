@@ -2212,3 +2212,103 @@ feed real: suite de integración y de tiempos verde, planificación en frío en 
 cambio de código y verificación, 3 solo con documentación donde el propio informe concluía
 que no hacía falta cambiar nada. Cifras finales: **375 tests en `VigoCore`** (321 antes de
 esta auditoría, +54 en total entre las cuatro tandas).
+
+## Bug real: parada de embarque lejana con varios accesos al mismo patrón
+
+Reporte del propietario, 2026-09-07: de pie en Avda. da Florida 82, el planificador
+recomendó la línea 29 pero mandó a caminar hasta Avda. da Florida 197 (~400 m, dígito
+transpuesto al recordarlo — no existe ninguna parada "187" en el feed) en vez de Avda. da
+Florida (fronte 82) — ~26 m, cruzando la calle, misma línea, mismo sentido.
+
+**Diagnóstico, descartando las tres hipótesis previas antes de tocar nada** (comprobado
+contra el GTFS real descargado de `datos.vigo.org`, no contra un fixture): no es un solo
+origen (`JourneyPlanner` ya genera un `StopWalk` por cada parada dentro de 800 m); no es
+confusión de sentido (82 solo sirve la dirección 1 — la contraria a la que necesitaba —,
+pero "fronte 82" y "197" sirven correctamente la dirección 0, la misma línea, el mismo
+patrón); no son datos rotos. Es una cuarta causa, en el propio núcleo de RAPTOR: en
+`RaptorEngine.run`, el barrido de un patrón arranca siempre desde la posición **más
+upstream** entre las paradas marcadas del patrón (`queue[pattern] = mínima posición`,
+`RaptorEngine.swift`, ronda ≥1, MARK 1) y `boardPosition` solo se actualiza al saltar a un
+**trip distinto** más temprano (`earliestTrip`) — nunca al descubrir que una posición
+posterior, también marcada y también capaz de coger el trip **ya embarcado**, habría sido
+la misma parada física con muchísima menos caminata. Con 197 (posición 7) y fronte-82
+(posición 8) del mismo patrón ambas marcadas, el barrido arranca en 197, embarca el primer
+trip factible allí, y al llegar a fronte-82 no hay trip más temprano que ofrecer — así que
+`boardPosition` se queda en 197 aunque fronte-82 coja exactamente el mismo autobús.
+
+**Arreglo, tres líneas en `RaptorEngine.swift`:** cuando no hay un trip más temprano pero
+la posición actual ya demostró (`current > boardable`) que puede embarcar el trip que ya se
+está montando, se avanza `boardPosition` a esa posición, sin cambiar de trip. Se prefiere
+así, de forma determinista, la parada marcada más downstream que sigue cogiendo el mismo
+autobús — que en la práctica es la más cercana al origen.
+
+**Generaliza más allá del caso reportado, como pedía verificar el encargo:** no es
+específico de direcciones opuestas ni de esta calle — ocurre en cualquier ronda (acceso,
+pero también un transbordo) donde dos o más paradas marcadas alimenten el mismo patrón.
+Confirmado contra el feed real de esta semana: aunque la línea 29 ya no repite el caso
+exacto reportado (el horario semanal cambió), un barrido minuto a minuto de 06:00 a 09:00
+desde Florida 82 mostró el mismo defecto en las líneas **11** y **5001** —
+**189 embarques en la parada lejana (197) con el motor sin arreglar, 0 con el arreglo**.
+
+**Verificado por mutación:** `RaptorEngineTests.boardingPrefersTheCloserOfTwoAccessPointsOnTheSameTrip`
+(red mínima de 3 paradas, 1 patrón, 1 trip) falla sin el arreglo (`board → 0` en vez de `1`)
+y pasa con él; ninguno de los tests de empate de H-07 (mismo fichero) se ve afectado —
+comprobado explícitamente, ya que tocan la misma región del bucle. Test de datos reales
+`RealFeedIntegrationTests.florida82DoesNotSendYouToTheFarStop`: comprueba primero que las
+dos paradas están donde deben (distancias reales) y luego barre 181 instantes de una mañana
+real; deliberadamente **no** fija un único instante de la línea 29 — el feed regenera cada
+semana y ese instante concreto ya no reproduce el empate, así que fijarlo habría dejado un
+test que pasa sin que el arreglo haga nada, justo lo que `AUDITORIA-RAPTOR.md` fija como
+peor que no tener test.
+
+**Verificación.** Suite de `VigoCore`: **377 tests en verde** (376 antes, +1: el test de
+red mínima; el test de datos reales se añade a la suite ya existente gated por
+`VIGO_GTFS_ZIP`). Contra el feed real de esta semana (`gtfs_vigo.zip` descargado el
+2026-09-07): 377/377, incluida la referencia de fuerza bruta (200 redes aleatorias) sin
+cambios — el arreglo no altera ningún resultado que esa referencia ya daba por óptimo, solo
+qué parada exacta se atribuye cuando dos son igual de válidas.
+
+## Parte B — trazado completo de una línea en el mapa
+
+Reconocimiento previo (mismo encargo, `HANDOFF-parada-embarque-y-trazado-linea.md`): no
+existía ninguna vista ni consulta que dibujara el trazado de una **línea**; todo lo que
+usaba `shapePoint` estaba acoplado a un `tripID` concreto de un trayecto ya planificado
+(`JourneyTraceBuilder`, recortado al tramo subida→bajada). `shapes.txt` ya estaba importado
+—no hizo falta reconstruir nada desde `lineas-vitrasa`—, así que la pieza que faltaba era
+la consulta `routeID → shapeID(s)`, trivial de escribir sobre columnas ya indexadas
+(`trip.routeID`, `trip.directionID`, `trip.shapeID`).
+
+**`TransitRepository.routeTraces(routeID:)`** (nuevo, `TransitRepository.swift`): una
+`RouteTrace` por `directionID` que la línea recorre de verdad. Un solo trip representa cada
+sentido —todos los trips de un mismo patrón comparten secuencia de paradas por construcción
+(`TimetableBuilder.PatternKey`), así que la geometría no cambia por trip— elegido por
+**más `stopTime`** para que una variante corta (short-turn) nunca sustituya al recorrido
+completo.
+
+**`LineTraceView`** (nueva, `App/ILoveVigoRoutes/Views/LineTraceView.swift`): `Map` con
+`MapPolyline` del shape completo (sin recortar, a diferencia de `JourneyTraceBuilder`) y un
+`Marker` por parada en su posición real. Selector de sentido en un `Menu` cuando la línea
+tiene los dos. Encuadre con `CoordinateBounds` — la misma pieza pura que ya usa
+`JourneyTraceBuilder.region(for:traces:)` para trayectos, ahora también para una línea
+entera —, así que el criterio de aceptación («encuadrado para verse entero de inicio») sale
+gratis de código ya existente y probado. Enlazada desde `LineTimetableView` (único sitio
+hoy donde ya hay una línea seleccionada) con un botón «Ver trazado» en la barra.
+
+**Sin tests de mutación nuevos donde no hacía falta**: `CoordinateBounds` y el encuadre ya
+tienen su suite (`Encuadre de coordenadas`); `routeTraces` es una consulta SQL nueva,
+verificada con un test de integración contra el feed real (`routeTracesForALine`): dos
+sentidos para la línea 29, cada uno con su geometría y sus paradas en orden, y una línea sin
+servicio no revienta, devuelve vacío.
+
+**Verificación.** `VigoCore`: **378 tests en verde** (377 antes, +1). Contra el feed real
+de esta semana: 378/378. `xcodebuild -scheme ILoveVigoRoutes -destination 'platform=iOS
+Simulator,name=iPhone 17 Pro' build` y `test` (18 tests de `ILoveVigoRoutesTests`) en
+verde.
+
+**No verificado — sesión de control remoto sin simulador disponible.** El punto «Comprobación
+en dispositivo» que toda fase anterior de este documento deja pendiente aplica aquí tal
+cual: que el `Menu` de sentido quepa en la barra, que el mapa se abra realmente encuadrado
+al trazado completo en un iPhone real, y que los marcadores de parada no se amontonen en
+una línea con paradas muy juntas. Compilación y tests, sí; ojos sobre el simulador, no —
+las herramientas de simulador no están disponibles en esta sesión remota. Pendiente de
+comprobación por el propietario.

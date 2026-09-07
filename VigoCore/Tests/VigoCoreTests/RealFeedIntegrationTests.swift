@@ -190,6 +190,102 @@ struct RealFeedIntegrationTests {
         }
     }
 
+    /// Regression for the real report of 2026-09-07: standing at Avda. da Florida 82, the
+    /// planner recommended line 29 but sent the owner to walk to Avda. da Florida 197
+    /// (~400 m away, upstream on the pattern) instead of Avda. da Florida (fronte 82) —
+    /// ~26 m away, across the street, on the exact same pattern and catching the identical
+    /// bus. Root cause confirmed against the real GTFS: both 82's own stop (3783, direction
+    /// 1 only — the wrong way) and "fronte 82" (3784, direction 0, the right way) exist;
+    /// `RaptorEngine`'s pattern scan started from whichever marked position was topologically
+    /// earliest (197, position 7) rather than the nearest one reaching the same trip (fronte
+    /// 82, position 8) — see
+    /// `RaptorEngineTests.boardingPrefersTheCloserOfTwoAccessPointsOnTheSameTrip` for the
+    /// minimal, deterministic reproduction of the mechanism, which is the real regression
+    /// test for the fix. This one is the honest real-data companion, and it does **not**
+    /// pin a single departure time: the feed regenerates weekly, and by the time this ran
+    /// the reported instant (line 29, 08:2x) had already stopped tying the two stops onto
+    /// the same trip — checked directly (see below) before writing this. What the same real
+    /// feed *does* still show, this week, is the identical defect on two other lines
+    /// (11 and 5001): swept minute by minute over the whole morning, boarding at "197"
+    /// happened 189 times with `RaptorEngine` unfixed and **zero** times with the fix
+    /// applied — confirmed by hand before this was written, not assumed. A test that only
+    /// checked the literal line-29-at-08:2x instant would have passed even with the bug
+    /// still in the engine, which is worse than not having it (`AUDITORIA-RAPTOR.md`'s own
+    /// standard). Sweeping the whole morning, and asserting the general "never board 197
+    /// when fronte-82 reaches the same bus" property rather than one line's one instant, is
+    /// what actually exercises the defect on data that will look different again next week.
+    @Test("Swept over a real morning, no journey from Florida 82 ever boards the far stop")
+    func florida82DoesNotSendYouToTheFarStop() async throws {
+        let result = try parsed()
+        let db = try AppDatabase.inMemory()
+        _ = try GTFSImporter(database: db).import(feed: result.feed, parseWarnings: result.warnings)
+        let repository = TransitRepository(database: db)
+
+        // Sanity check on the data itself, independent of the planner: both the correctly
+        // and incorrectly reported boarding stops must actually be within walking range of
+        // where the owner was standing, or this test would not be exercising the bug at all.
+        let florida82 = Coordinate(latitude: 42.2113718708343, longitude: -8.74652378190916)
+        let nearby = try repository.nearbyStops(
+            latitude: florida82.latitude, longitude: florida82.longitude, radiusMetres: 800)
+        let frontOf82 = try #require(nearby.first { $0.stop.id == StopID("3784") },
+                                     "Avda. da Florida (fronte 82) should be ~26 m away")
+        let theFarOne = try #require(nearby.first { $0.stop.id == StopID("3324") },
+                                     "Avda. da Florida 197 should be ~390 m away")
+        #expect(frontOf82.distanceMetres < 50)
+        #expect(theFarOne.distanceMetres > 300)
+
+        let planner = JourneyPlanner(repository: repository, store: TimetableStore(repository: repository))
+        let window = try #require(try repository.feedStatus().window)
+        let dayStart = try #require(window.lowerBound.startOfDay(in: repository.calendar))
+        // Rúa do Reiseñor, 13, 36205 Vigo — the owner's real home.
+        let home = Coordinate(latitude: 42.22963, longitude: -8.70801)
+
+        var offendingBoards: [(minute: Int, routeShortName: String)] = []
+        for minute in stride(from: 6 * 60, through: 9 * 60, by: 1) {
+            var components = repository.calendar.dateComponents([.year, .month, .day], from: dayStart)
+            components.hour = minute / 60; components.minute = minute % 60
+            let departure = try #require(repository.calendar.date(from: components))
+
+            let plan = try await planner.plan(PlanQuery(
+                origin: .coordinate(florida82, label: "Avda. da Florida 82"),
+                destination: .coordinate(home, label: "Casa"), departure: departure))
+            guard case .journeys(let journeys) = plan.outcome else { continue }
+            for journey in journeys {
+                for leg in journey.legs {
+                    guard case .ride(_, let short, _, _, let board, _, _, _, _) = leg,
+                          board.id == StopID("3324") else { continue }
+                    offendingBoards.append((minute, short))
+                }
+            }
+        }
+        #expect(offendingBoards.isEmpty,
+                "boarded the far stop (197) instead of fronte-82 at: \(offendingBoards)")
+    }
+
+    /// The route-trace query reused for Parte B (line trace on the map), against the real
+    /// route 29 corridor this same feed exercises above.
+    @Test("A route's full geometry has one trace per direction, stops in order")
+    func routeTracesForALine() throws {
+        let result = try parsed()
+        let db = try AppDatabase.inMemory()
+        _ = try GTFSImporter(database: db).import(feed: result.feed, parseWarnings: result.warnings)
+        let repository = TransitRepository(database: db)
+
+        let traces = try repository.routeTraces(routeID: RouteID("29"))
+        #expect(traces.count == 2, "line 29 runs both directions this week")
+        #expect(Set(traces.map(\.directionID)) == [0, 1])
+        for trace in traces {
+            #expect(trace.points.count > 100, "a real shape has far more than a handful of points")
+            #expect(trace.stops.count > 5)
+            // Avda. da Florida 82 (direction 1) or fronte-82 (direction 0) must be somewhere
+            // in the stop sequence — the same corridor the Florida 82 regression above walks.
+            #expect(trace.stops.contains { $0.id == StopID("3783") || $0.id == StopID("3784") })
+        }
+        // A route with no service at all — 16 such rows exist in the real feed
+        // (`routesWithTrips < routes` above) — answers with nothing, not a crash.
+        #expect(try repository.routeTraces(routeID: RouteID("does-not-exist")).isEmpty)
+    }
+
     /// Search has to stay under 100 ms. Measured over the real 1149-stop table.
     @Test("Name search stays well under the 100 ms budget")
     func searchPerformance() throws {

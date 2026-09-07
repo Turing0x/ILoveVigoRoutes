@@ -366,6 +366,66 @@ struct RaptorEngineTests {
         #expect(timetable.tripRef(pattern: 0, trip: Int(trip)).tripID == TripID("T1"))
     }
 
+    // MARK: - Multiple access points on the same pattern (Avda. da Florida, 2026-09-07)
+    //
+    // The bug behind a real report: standing at "Avda. da Florida 82" (stop A here), the
+    // planner sent the owner to walk to "Avda. da Florida 197" (stop 400 m away, upstream on
+    // the same pattern) to catch line 29 — when "Avda. da Florida (fronte 82)" (stop B here),
+    // 26 m away and on the exact same pattern, catches the identical bus. Both stops are
+    // correctly on the same direction/pattern; this is not H-DIRECTION, it is the scan
+    // committing to whichever marked position is topologically earliest and never
+    // reconsidering a later marked position that catches the very same trip.
+
+    /// A, then B, then C, on one pattern, one trip. Both A and B are marked reachable (A far,
+    /// B close); the trip departs A at 300 and B at 305. Boarding at either A or B rides the
+    /// same trip to C — but only B reflects the real walking cost.
+    private static func multiAccessSamePatternTimetable()
+        -> (timetable: Timetable, a: Int, b: Int, c: Int) {
+        let stops = [
+            PlannerFixture.stop("FA0", name: "Avda. da Florida 197 (far, upstream)"),
+            PlannerFixture.stop("FA1", name: "Avda. da Florida (fronte 82) (close, downstream)"),
+            PlannerFixture.stop("FA2", name: "Further along the route"),
+        ]
+        var stopIndexByID: [StopID: Int32] = [:]
+        for (index, stop) in stops.enumerated() { stopIndexByID[stop.id] = Int32(index) }
+
+        let timetable = Timetable(
+            stops: stops, stopIndexByID: stopIndexByID,
+            patternStopsOffset: [0, 3], patternStops: [0, 1, 2],
+            patternTripsOffset: [0, 1],
+            tripRefs: [
+                TripRef(tripID: TripID("29"), serviceDate: ServiceDate(yyyymmdd: 20_260_101),
+                        dayOffsetSeconds: 0, headsign: nil),
+            ],
+            patternTimesOffset: [0],
+            tripArrival: [300, 305, 310], tripDeparture: [300, 305, 310],
+            patternRouteID: [RouteID("R29")], patternRouteShortName: ["29"],
+            stopPatternsOffset: [0, 1, 2, 3],
+            stopPatternPattern: [0, 0, 0], stopPatternPosition: [0, 1, 2],
+            footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
+            anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+        return (timetable, 0, 1, 2)
+    }
+
+    @Test("Boarding prefers the closer of two marked stops that catch the same trip")
+    func boardingPrefersTheCloserOfTwoAccessPointsOnTheSameTrip() throws {
+        let (timetable, a, b, c) = Self.multiAccessSamePatternTimetable()
+        let result = RaptorEngine().run(timetable, RaptorQuery(
+            // A is 300 s of walking away, B only 10: B is the "fronte 82" of the real report.
+            access: [StopWalk(stop: Int32(a), seconds: 300), StopWalk(stop: Int32(b), seconds: 10)],
+            egress: [], departure: 0, horizon: 10_800))
+
+        #expect(result.arrival(round: 1, stop: c) == 310, "the same trip either way")
+        guard case .ride(_, let trip, let board, let alight)? = result.parent(round: 1, stop: c) else {
+            Issue.record("expected a ride into C"); return
+        }
+        #expect(timetable.tripRef(pattern: 0, trip: Int(trip)).tripID == TripID("29"))
+        #expect(alight == 2)
+        #expect(board == 1,
+                "B (10 s away) catches this exact trip too; recording A (300 s away) as the boarding stop is the Florida 82→197 bug")
+    }
+
     // MARK: - Bounds
 
     @Test("Nothing outside the horizon is reached")

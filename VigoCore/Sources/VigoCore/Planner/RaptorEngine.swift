@@ -215,6 +215,18 @@ public struct RaptorEngine: Sendable {
                                                   below: trip >= 0 ? trip : trips) {
                         trip = earlier
                         boardPosition = position
+                    } else if trip >= 0 {
+                        // No earlier trip exists, but `current > boardable` already proved this
+                        // position can catch the trip we are already riding — it is just a
+                        // later (so, in practice, closer-to-the-passenger) stop on the very same
+                        // vehicle. Without this, `boardPosition` stays pinned to wherever the
+                        // pattern scan happened to start (the *most upstream* marked stop, not
+                        // the nearest one), and reconstruction attributes the access walk to
+                        // that far stop instead of a closer one that boards the identical bus.
+                        // Real case: standing at Avda. da Florida 82, sent to walk to Avda. da
+                        // Florida 197 (400 m away) for line 29, when Avda. da Florida (fronte
+                        // 82) — 26 m away, same pattern, same trip — was right there.
+                        boardPosition = position
                     }
                 }
             }

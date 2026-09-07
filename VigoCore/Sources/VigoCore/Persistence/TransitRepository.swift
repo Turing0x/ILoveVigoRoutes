@@ -29,6 +29,18 @@ public struct NearbyStop: Sendable, Hashable, Identifiable {
     public var id: StopID { stop.id }
 }
 
+/// One direction's worth of a route's geometry: the shape it runs and the stops along it,
+/// in order. See `TransitRepository.routeTraces(routeID:)`.
+public struct RouteTrace: Sendable, Hashable, Identifiable {
+    public let directionID: Int
+    public let headsign: String?
+    public let shapeID: ShapeID
+    public let points: [ShapePoint]
+    /// In the order the route actually visits them.
+    public let stops: [Stop]
+    public var id: Int { directionID }
+}
+
 /// Everything the app knows about where its static data came from and how long it is
 /// good for. Surfaced in the UI rather than kept in logs.
 public struct FeedStatus: Sendable, Hashable {
@@ -333,6 +345,47 @@ public struct TransitRepository: Sendable {
         try database.writer.read { db in
             try ShapePoint.filter(sql: "shapeID = ?", arguments: [id.rawValue])
                 .order(sql: "sequence").fetchAll(db)
+        }
+    }
+
+    /// The full geometry of a route, one trace per direction it actually runs today.
+    ///
+    /// One trip per `directionID` stands in for all of them: every trip of a pattern shares
+    /// the same stop sequence by construction (`TimetableBuilder.PatternKey`), so the
+    /// geometry does not repeat per departure — only which trip has the most `stopTime`
+    /// rows decides which one is picked, so a short-turn variant never stands in for the
+    /// full route.
+    public func routeTraces(routeID: RouteID) throws -> [RouteTrace] {
+        try database.writer.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT t.id AS tripID, t.directionID AS directionID, t.shapeID AS shapeID,
+                       t.headsign AS headsign, COUNT(st.stopID) AS stopCount
+                FROM trip t
+                JOIN stopTime st ON st.tripID = t.id
+                WHERE t.routeID = ? AND t.shapeID IS NOT NULL AND t.directionID IS NOT NULL
+                GROUP BY t.id
+                ORDER BY t.directionID, stopCount DESC
+                """, arguments: [routeID.rawValue])
+
+            // The first row seen for a direction is its longest trip: rows already come out
+            // sorted by `stopCount DESC` within each `directionID`.
+            var chosen: [Int: (tripID: String, shapeID: String, headsign: String?)] = [:]
+            for row in rows {
+                let direction: Int = row["directionID"]
+                guard chosen[direction] == nil else { continue }
+                chosen[direction] = (row["tripID"] as String, row["shapeID"] as String, row["headsign"] as String?)
+            }
+
+            return try chosen.sorted { $0.key < $1.key }.map { direction, trip in
+                let points = try ShapePoint.filter(sql: "shapeID = ?", arguments: [trip.shapeID])
+                    .order(sql: "sequence").fetchAll(db)
+                let stops = try Stop.fetchAll(db, sql: """
+                    SELECT s.* FROM stopTime st JOIN stop s ON s.id = st.stopID
+                    WHERE st.tripID = ? ORDER BY st.stopSequence
+                    """, arguments: [trip.tripID])
+                return RouteTrace(directionID: direction, headsign: trip.headsign,
+                                  shapeID: ShapeID(trip.shapeID), points: points, stops: stops)
+            }
         }
     }
 
