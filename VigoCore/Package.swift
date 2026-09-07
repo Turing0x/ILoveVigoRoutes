@@ -14,7 +14,8 @@ let package = Package(
         .target(
             name: "VigoCore",
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
-            resources: [.copy("Resources/footpaths.csv")],
+            resources: [.copy("Resources/footpaths.csv"),
+                        .copy("Resources/holidays-vigo.json")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

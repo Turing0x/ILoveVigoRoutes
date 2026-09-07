@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "Días en los que Vitrasa circula con horario de festivo (domingo).",
+    "",
+    "Sólo lo usa la proyección de calendario: cuando el GTFS no llega al día",
+    "consultado, ServiceDayResolver reutiliza el mismo día de la semana más",
+    "reciente, y este fichero es lo que impide que un 25 de diciembre herede el",
+    "horario de un jueves cualquiera. Un día que el feed SÍ cubre nunca se",
+    "proyecta, así que nada de aquí puede alterar un dato observado.",
+    "",
+    "IMPORTANTE — 'local' caduca. Los festivos locales de Vigo los fija el",
+    "Concello cada año y se publican en el DOG. Hay que revisarlos anualmente;",
+    "no se pueden deducir. Los de 'fixed' (nacionales y de Galicia) y los",
+    "derivados de la Pascua ('easterOffsets', calculados en código) son estables.",
+    "",
+    "Al ampliar 'lastYear' hay que añadir también los 'local' de esos años, o",
+    "esos años quedarán con festivos nacionales pero sin los de la ciudad."
+  ],
+
+  "firstYear": 2025,
+  "lastYear": 2028,
+
+  "fixed": [
+    { "month": 1,  "day": 1,  "name": "Ano Novo" },
+    { "month": 1,  "day": 6,  "name": "Reis" },
+    { "month": 5,  "day": 1,  "name": "Día do Traballo" },
+    { "month": 5,  "day": 17, "name": "Día das Letras Galegas" },
+    { "month": 7,  "day": 25, "name": "Santiago Apóstolo — Día Nacional de Galicia" },
+    { "month": 8,  "day": 15, "name": "Asunción" },
+    { "month": 10, "day": 12, "name": "Fiesta Nacional de España" },
+    { "month": 11, "day": 1,  "name": "Todos os Santos" },
+    { "month": 12, "day": 6,  "name": "Día da Constitución" },
+    { "month": 12, "day": 8,  "name": "Inmaculada" },
+    { "month": 12, "day": 25, "name": "Nadal" }
+  ],
+
+  "easterOffsets": [
+    { "offset": -3, "name": "Xoves Santo" },
+    { "offset": -2, "name": "Venres Santo" }
+  ],
+
+  "local": [
+    { "date": 20250328, "name": "Reconquista de Vigo — VERIFICAR en el DOG" },
+    { "date": 20260328, "name": "Reconquista de Vigo — VERIFICAR en el DOG" },
+    { "date": 20270328, "name": "Reconquista de Vigo — VERIFICAR en el DOG" },
+    { "date": 20280328, "name": "Reconquista de Vigo — VERIFICAR en el DOG" }
+  ]
+}

@@ -510,9 +510,9 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | A0 · Preguntar por el feed largo | **pendiente — acción humana** | — |
 | B1 · Factores de detour asimétricos | ✅ hecho | `b1` |
 | B2 · Footpaths reales precalculados | ✅ hecho | `b2` |
-| A1 · Versionar el feed | pendiente | |
+| A1 · Versionar el feed | ❌ **descartado — innecesario** | — |
 | A2 · Proyección semanal etiquetada | pendiente | |
-| A3 · Calendario de festivos | pendiente | |
+| A3 · Calendario de festivos | ✅ hecho | `a3` |
 | C1 · Coste generalizado en el corte | pendiente | |
 | C2 · Rebarrido de salidas | pendiente | |
 | C3 · Modo silla de ruedas | pendiente | |
@@ -616,6 +616,62 @@ empaquetado no debe tirar la app), y esa decisión necesita una alarma que la vi
 se pueden precalcular. Eso es B3.
 
 **Verificación.** 400 tests en 46 suites, verde. Nueve nuevos.
+
+### A1 — Descartado, y por qué
+
+El plan original proponía versionar el feed —conservar ocho semanas de `trip` y `stopTime`—
+para poder responder más allá de la ventana de siete días, y yo mismo marqué sus 64 MB como
+riesgo a medir antes de comprometerse. Al medirlo resultó que **el problema no era ése**.
+
+Para contestar "¿cómo voy el martes que viene?" no hacen falta los horarios de semanas
+pasadas. Hace falta saber **qué `service_id` circulan ese martes** — y los viajes de esos
+servicios ya están en la base de datos, porque el feed de esta semana los trae. Lo único que
+falta es la fila del calendario que dice "el 20 de octubre corren estos servicios".
+
+Así que se proyecta **el conjunto de servicios, no los horarios**. Cero coste en disco, cero
+migración de esquema, y el mismo resultado. A1 se cae entera y su trabajo lo hace A2.
+
+### A3 — Calendario de festivos ✅
+
+Va antes que A2 porque A2 sin esto miente, y miente el día que más gente consulta.
+
+**El problema que resuelve.** La proyección reutiliza el mismo día de la semana más reciente.
+Para un martes normal es correcto. Para un martes que es 25 de diciembre es falso: circula
+horario de domingo. Y el error va en las dos direcciones — un festivo **dentro** de la ventana
+observada tampoco puede servir de plantilla, o una semana capturada que incluya el 12 de
+octubre propagaría horario de festivo a todos los lunes durante dos meses.
+
+**Qué hay.** `HolidayCalendar` + `Resources/holidays-vigo.json`, en tres tramos con fiabilidad
+distinta y declarada:
+
+| Tramo | Fuente | Fiabilidad |
+|---|---|---|
+| Fijos nacionales y de Galicia | Ley, estables | Alta |
+| Derivados de la Pascua (Xoves e Venres Santo) | **Calculados**, algoritmo de Meeus | Exacta |
+| Locales de Vigo | Los fija el Concello cada año, DOG | **Caducan — revisión anual** |
+
+La Pascua se calcula en vez de tabularse: una tabla sería una cosa más que actualizar cada año,
+y la fórmula es exacta para cualquier año gregoriano. Hay un test que lo comprueba en
+**1900–2200**: siempre en domingo, siempre entre el 22 de marzo y el 25 de abril.
+
+**Sobre los festivos locales, sin adornos.** No los puedo verificar. Los fija el Concello
+anualmente y se publican en el DOG. En el JSON van marcados `VERIFICAR en el DOG` y el bloque
+`_comment` dice que hay que repasarlos cada año y que ampliar `lastYear` sin añadir los
+`local` de esos años deja años con festivos nacionales y sin los de la ciudad. **Esto es una
+tarea recurrente tuya, no un dato resuelto.**
+
+**Por qué una lista imperfecta es aceptable igualmente.** Contención: un festivo mal puesto
+sólo puede afectar a un día que **ya se está proyectando**, y todo día proyectado se etiqueta
+como estimado en la interfaz (A2). Degrada una respuesta que nunca se presentó como firme, y
+no puede tocar jamás un día que el feed sí cubre, porque un dato observado no se proyecta.
+
+`covers(year:)` distingue "no es festivo" de "no sé nada de ese año". A2 se niega a proyectar
+más allá de los años expandidos en vez de adivinar.
+
+**Verificación.** 408 tests en 47 suites, verde. Ocho nuevos, incluido el caso observado: el
+12 de octubre de 2026 es lunes y el planificador del Concello devuelve para ese día horario de
+domingo (§2.8). Es la observación que motivó el fichero y la primera que se rompería si
+alguien lo vaciara.
 
 ### B1 — Factores de detour asimétricos ✅
 
