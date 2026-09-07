@@ -136,6 +136,18 @@ public struct PlannerOptions: Sendable, Hashable {
     /// they do want.
     public var extraTransferWorthSeconds: Int
 
+    /// How far past a criterion's own best answer a journey may cost, in perceived seconds,
+    /// and still be worth offering (`JourneyShortlist.plausible`).
+    ///
+    /// The number that decides where a list of alternatives stops being a list of
+    /// alternatives. Fifteen perceived minutes: a journey that no criterion can bring within
+    /// a quarter of an hour of its own optimum is not a trade anybody is making, it is the
+    /// next departure — and the next departure is what the whole list already is.
+    ///
+    /// Perceived, not real: the cost includes walking counted more than once and a five
+    /// minute charge per transfer, so this is a looser bound on clock time than it looks.
+    public var alternativeSlackSeconds: TimeInterval
+
     /// How far past the feed's last observed day the planner will project a timetable.
     ///
     /// The published GTFS is a rolling seven-day window, so without projection every question
@@ -176,7 +188,8 @@ public struct PlannerOptions: Sendable, Hashable {
         maxEgressCandidates: Int = 3,
         extraTransferWorthSeconds: Int = 300,
         maxNearbyStops: Int = 100,
-        maxProjectionDays: Int = 60
+        maxProjectionDays: Int = 60,
+        alternativeSlackSeconds: TimeInterval = 900
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
         self.accessDetourFactor = accessDetourFactor
@@ -194,5 +207,6 @@ public struct PlannerOptions: Sendable, Hashable {
         self.extraTransferWorthSeconds = extraTransferWorthSeconds
         self.maxNearbyStops = maxNearbyStops
         self.maxProjectionDays = maxProjectionDays
+        self.alternativeSlackSeconds = alternativeSlackSeconds
     }
 }

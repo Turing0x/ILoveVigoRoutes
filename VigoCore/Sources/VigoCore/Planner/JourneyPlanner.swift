@@ -250,12 +250,14 @@ public struct JourneyPlanner: Sendable {
     }
 
     /// Turns everything collected into the pool actually worth offering: no duplicates, no
-    /// dominated options, soonest arrival first.
+    /// dominated options, nothing no criterion would want, soonest arrival first.
+    ///
     private func ranked(_ journeys: [Journey]) -> [Journey] {
         var seen = Set<Journey>()
         var unique: [Journey] = []
         for journey in journeys where seen.insert(journey).inserted { unique.append(journey) }
-        return JourneyShortlist.cut(JourneyShortlist.undominated(unique),
-                                    to: options.maxCandidates)
+        let front = JourneyShortlist.plausible(JourneyShortlist.undominated(unique),
+                                               slack: options.alternativeSlackSeconds)
+        return JourneyShortlist.cut(front, to: options.maxCandidates)
     }
 }

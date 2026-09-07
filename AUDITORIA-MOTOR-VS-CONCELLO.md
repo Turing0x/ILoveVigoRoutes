@@ -513,8 +513,8 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | A1 · Versionar el feed | ❌ **descartado — innecesario** | — |
 | A2 · Proyección semanal etiquetada | ✅ hecho | `a2` |
 | A3 · Calendario de festivos | ✅ hecho | `a3` |
-| C1 · Coste generalizado en el corte | pendiente | |
-| C2 · Rebarrido de salidas | pendiente | |
+| C1 · Coste generalizado en el corte | ✅ hecho | `c1` |
+| C2 · Rebarrido de salidas | ❌ **retirado — medido, no hacía falta** | — |
 | C3 · Modo silla de ruedas | pendiente | |
 | D1 · Tiempo real en la primera pierna | pendiente | |
 | B3 · MKDirections en acceso/egreso | pendiente | |
@@ -731,6 +731,102 @@ el planificador y el aviso del mapa — incluido uno que comprueba que un festiv
 puede alterar un día observado, y otro que fija que la misma pregunta da siempre la misma
 respuesta (`observedDays` es un `Set`, y depender de su orden de iteración daría horarios
 distintos en dos arranques de la misma app con los mismos datos). La app compila.
+
+### C2 — Retirado. Lo medí y no era verdad
+
+Escribí en la Fase 2 que el rebarrido desperdiciaba pases porque reinicia un segundo después
+del embarque **más temprano de todo el lote**. Lo diagnostiqué leyendo el código. Al medirlo
+contra el feed real, sobre cuatro pares origen-destino:
+
+```
+16 pases en total, 1 sin aportar ningún trayecto nuevo
+```
+
+Y ese único pase estéril fue seguido de otros dos que aportaron tres trayectos, así que el
+corte temprano que iba a añadir habría **empeorado** la respuesta. La regla de reinicio actual
+hace justo lo que debe: cada pase encuentra "el siguiente autobús" para la parada que tenía el
+más temprano.
+
+Retirado. Queda como test de regresión en `ShortlistRealFeedTests`, para que si alguien cambia
+la regla de reinicio se entere.
+
+### C1 — Coste generalizado para podar alternativas ✅
+
+**La premisa sí se confirmó, y era peor de lo que dije.** Medido contra el feed real:
+
+| Consulta | Únicos | Frente de Pareto | Abarcaba |
+|---|---:|---:|---:|
+| Príncipe → Cunqueiro | 5 | **5** (no descartó nada) | 48 min |
+| Samil → Urzáiz | 10 | **10** (no descartó nada) | 42 min |
+| Camelias → Samil | 7 | 6 | 84 min |
+| Suárez Llanos → Bembrive | 9 | 6 | 60 min |
+
+La dominancia de cinco ejes **no descarta nada** en la mitad de las consultas. Y entre lo que
+deja pasa esto (Suárez Llanos → Bembrive, medido):
+
+```
+sale 9:31  llega 10:08  camina 0 s  1 transbordo   C3i+6
+sale 9:46  llega 10:30  camina 0 s  2 transbordos  5B+H2+6
+```
+
+El segundo llega más tarde, cambia una vez más y no camina menos. Sobrevive **sólo porque sale
+después** — el eje de H-05, «menos rato de pie en la parada», que no tiene tope: por muy tarde
+que sea, sigue puntuando. En los términos del frente es legítimamente no dominado. Y no es
+alternativa de nadie.
+
+**Dos borradores, y el primero estaba mal.** Vale la pena contarlo porque el error es
+instructivo.
+
+*Primer intento:* coste medido desde el reloj de la consulta, como hace OTP. Funcionó
+demasiado bien:
+
+```
+Príncipe → Cunqueiro:  ANTES n=5 abarca 48 min  →  AHORA n=1 abarca 0 min
+```
+
+Las cuatro que tiraba eran los autobuses de las 9:37, 9:39, 9:50 y 10:01. **No eran basura:
+eran los siguientes autobuses**, que es la mayor parte de para qué sirve una lista de
+alternativas. Cobrar por llegar tarde borra la lista; cobrar por ser ineficiente no.
+
+*Segundo intento:* el coste mide el trayecto **desde su propia salida**. Dos salidas idénticas
+separadas media hora cuestan exactamente lo mismo.
+
+*Y aun así faltaba algo.* Con eso, el caso de Bembrive descartaba el 9:22 — que es el óptimo de
+«sale antes». La poda corre **antes** de que el usuario elija criterio, así que tirar el óptimo
+de cualquiera de ellos es exactamente el pecado de H-04 y H-05, reintroducido un paso antes.
+Ahora **el ganador de cada criterio se conserva incondicionalmente**, antes de mirar ningún
+coste.
+
+**Resultado final, medido:**
+
+```
+Príncipe → Cunqueiro:      5 → 4   (cae el de 322 s de caminata final)
+Samil → Urzáiz:            8 → 7
+Camelias → Samil:          6 → 4
+Suárez Llanos → Bembrive:  6 → 3   (caen el 9:46 de dos transbordos y los dos de las 9:55)
+```
+
+Siete de veinticinco podadas, ningún óptimo perdido, las salidas sucesivas intactas.
+
+**Los pesos**, análogo local de los perfiles que el Concello manda a OTP (§2.5,
+`walkReluctance` 10 frente a 35, `transferPenalty` 600):
+
+| Criterio | Coste |
+|---|---|
+| Llega antes / Sale antes | viaje + caminata total + 300 s × transbordos |
+| Menos caminata | lo mismo **+ 2 × caminata final** |
+
+«Sale antes» comparte coste con «llega antes» a propósito: la poda pregunta *si el trayecto es
+decente*, y salir antes no cambia lo que hace decente a un trayecto — cambia cuál se enseña
+primero, y de eso ya se encarga `isBefore`. Darle un coste propio que premiara salir pronto
+readmitiría justo el 9:46 de dos transbordos.
+
+**Verificación.** 441 tests en 51 suites, verde. Trece nuevos, más cuatro contra el feed real
+en `ShortlistRealFeedTests` (con `VIGO_GTFS_ZIP`), que fijan las cuatro propiedades medidas:
+los pases del rebarrido son productivos, la dominancia sola apenas filtra, la poda recorta sin
+quitarle a ningún criterio su respuesta, y conserva más de una salida. Esos cuatro tests son lo
+que atrapó los dos borradores fallidos; un fixture sintético no te dice que un filtro se está
+comiendo los cuatro autobuses siguientes.
 
 ### B1 — Factores de detour asimétricos ✅
 

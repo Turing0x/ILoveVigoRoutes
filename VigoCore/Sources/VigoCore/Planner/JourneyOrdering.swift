@@ -97,6 +97,75 @@ public enum JourneyOrdering: String, Sendable, Hashable, CaseIterable, Codable {
         return seconds
     }
 
+    // MARK: - Coste generalizado
+
+    /// What one criterion thinks a journey costs, in **perceived** seconds — measured from
+    /// the journey's own departure, so it prices the *journey* and not the hour it happens
+    /// to leave at.
+    ///
+    /// Not a fourth ordering. `isBefore` still decides what the user sees, and it stays a
+    /// lexicographic answer to a plain question. This exists for the one job ordering cannot
+    /// do: deciding what does not belong on the list at all.
+    ///
+    /// **Why "from its own departure" and not from a common clock.** The first draft charged
+    /// every journey for the wall-clock time from the query onwards. Measured against the
+    /// real feed it worked far too well: a Príncipe → Cunqueiro search went from five
+    /// options to one, because the four it dropped were the 9:37, 9:39, 9:50 and 10:01
+    /// buses. Those are not junk — they are *the next buses*, which is most of what a list
+    /// of alternatives is for. Charging for lateness deletes the list. Charging for
+    /// inefficiency does not.
+    ///
+    /// **What it does catch**, from the same measurement, on Suárez Llanos → Bembrive:
+    ///
+    ///     sale 9:31  llega 10:08  camina 0 s  1 transbordo   C3i+6
+    ///     sale 9:46  llega 10:30  camina 0 s  2 transbordos  5B+H2+6
+    ///
+    /// The second is worse on arrival, worse on transfers and no better on foot, and it
+    /// survives `undominated` purely by leaving later — the "less time waiting at the stop"
+    /// axis (H-05), which has no upper bound on how much lateness it will excuse. Pareto
+    /// dominance cannot rule that out; a scalar cost can.
+    ///
+    /// The weights are policy, and the local analogue of the profiles the Concello's own
+    /// planner sends to OpenTripPlanner: `walkReluctance` 10 for "fastest" against 35 for
+    /// "least walking", `transferPenalty` 600 (`AUDITORIA-MOTOR-VS-CONCELLO.md` §2.5).
+    /// Theirs are in OTP's units; these are seconds per second, so the same relationship
+    /// reads as 1.0 against 3.0.
+    public func generalizedCostSeconds(_ journey: Journey) -> Double {
+        // Door to door for *this* journey: from the moment its own walk to the stop starts.
+        // Waiting at the stop before the first bus is inside it, so a journey does not get
+        // cheaper by dawdling; what is outside it is how long the traveller waited at home,
+        // which is not a property of the journey.
+        let travel = journey.arrival.timeIntervalSince(journey.departure)
+        let walkTotal = Double(journey.walkingSeconds)
+        let transfers = Double(journey.transfers) * Self.transferPenaltySeconds
+
+        switch self {
+        case .earliestArrival, .earliestBoarding:
+            // Deliberately the same. Plausibility asks "is this a decent journey", and
+            // "sale antes" does not change what makes one decent — it changes which decent
+            // one is shown first, and that is `isBefore`'s business. Giving this criterion a
+            // cost of its own that rewarded leaving early would let it re-admit exactly the
+            // 9:46-with-two-transfers this filter exists to drop.
+            return travel + walkTotal + transfers
+
+        case .leastWalkAtEnd:
+            // The final walk counted a second time, at twice its weight again: it is what
+            // this criterion is *about*, and the `walkTotal` term alone cannot tell it apart
+            // from the same minutes walked at the start. This is what keeps a slower journey
+            // that drops you at the door on the list.
+            return travel + walkTotal
+                + 2.0 * Double(Self.egressWalkSeconds(journey)) + transfers
+        }
+    }
+
+    /// What one change of vehicle is worth, in perceived seconds.
+    ///
+    /// Five minutes. Deliberately the same figure as `PlannerOptions.extraTransferWorthSeconds`,
+    /// which is the answer this project already gave to the same question one level up — a
+    /// transfer that saves less than five minutes is not worth offering. Two different
+    /// numbers for one belief would drift apart.
+    public static let transferPenaltySeconds: Double = 300
+
     /// When the first bus leaves, or `nil` for a journey that never boards one.
     ///
     /// **Not `Journey.departure`**, which is when the passenger has to start walking towards

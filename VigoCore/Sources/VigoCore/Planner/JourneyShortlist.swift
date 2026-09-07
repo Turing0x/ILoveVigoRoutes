@@ -72,6 +72,70 @@ public enum JourneyShortlist {
         }
     }
 
+    /// Drops the journeys that **no** criterion would want, before the front is cut.
+    ///
+    /// Pareto dominance cannot express this and never could. Measured against the real feed,
+    /// `undominated` discarded nothing at all on half the queries tried — and among what it
+    /// kept was this pair, on Suárez Llanos → Bembrive:
+    ///
+    ///     sale 9:31  llega 10:08  camina 0 s  1 transbordo   C3i+6
+    ///     sale 9:46  llega 10:30  camina 0 s  2 transbordos  5B+H2+6
+    ///
+    /// The second arrives later, changes bus one more time, and walks no less. It survives
+    /// only on the "leaves later, so less time waiting at the stop" axis (H-05) — an axis
+    /// with no bound on how much lateness it will excuse. On the front's own terms it is
+    /// genuinely undominated. It is still not an alternative to anybody.
+    ///
+    /// A journey survives if at least one criterion puts it within `slack` perceived seconds
+    /// of that criterion's own optimum. **At least one**, not all: this must not become a
+    /// fourth criterion imposed on top of the user's, and the journey that walks least has
+    /// every right to be an expensive answer under "llega antes" — that is precisely the
+    /// trade the menu exists to offer. What it may not be is expensive under all of them.
+    ///
+    /// **What this must not do is delete the next bus.** `generalizedCostSeconds` prices a
+    /// journey from its own departure for exactly that reason; the first draft measured from
+    /// the query's clock instead and cut a five-option search down to one, the four losers
+    /// being the following four departures. Read that doc comment before touching the
+    /// weights here.
+    public static func plausible(_ journeys: [Journey], slack: TimeInterval) -> [Journey] {
+        guard journeys.count > 1 else { return journeys }
+
+        // **Every criterion's own winner is kept unconditionally**, before any cost is
+        // considered. This filter runs before the user has picked a criterion, so dropping a
+        // criterion's top answer would leave that criterion reordering a set its own answer
+        // is missing from — the exact fault H-04 and H-05 were about, reintroduced one step
+        // earlier.
+        //
+        // It is not a theoretical worry. On Suárez Llanos → Bembrive the cost filter alone
+        // dropped the 9:22 departure: it arrives at the same 10:08 as the 9:31 and spends
+        // nine more minutes doing it, so it is worse on every axis the cost weighs — and it
+        // is the answer to "sale antes", which is a question the cost does not ask.
+        var protected = Set<Journey>()
+        for criterion in JourneyOrdering.allCases {
+            if let winner = criterion.apply(journeys, limit: 1).first {
+                protected.insert(winner)
+            }
+        }
+
+        var bestByCriterion: [JourneyOrdering: Double] = [:]
+        for criterion in JourneyOrdering.allCases {
+            bestByCriterion[criterion] = journeys
+                .map { criterion.generalizedCostSeconds($0) }
+                .min()
+        }
+        let kept = journeys.filter { journey in
+            if protected.contains(journey) { return true }
+            return JourneyOrdering.allCases.contains { criterion in
+                guard let best = bestByCriterion[criterion] else { return true }
+                return criterion.generalizedCostSeconds(journey) <= best + slack
+            }
+        }
+        // Cannot be empty — the protected set alone is non-empty for a non-empty input — but
+        // an empty result here would turn a successful search into "no route found", and
+        // that is not a failure worth being clever about.
+        return kept.isEmpty ? journeys : kept
+    }
+
     /// Cuts the front down to `limit` **without favouring any one criterion**.
     ///
     /// Taking the first `limit` by arrival would put the old default back through the side
