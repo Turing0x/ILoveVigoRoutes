@@ -28,6 +28,12 @@ struct JourneyAlternativeRow: View {
     /// ordinary row is unchanged and the extra line means something when it appears.
     var adjustment: LiveJourneyAdjustment.Adjustment? = nil
 
+    /// What the *measured* walks say (B3), once MapKit has answered.
+    ///
+    /// `nil` until then and `nil` without a network, which is why the row is built to read
+    /// correctly without it: this corrects an estimate, it does not supply a missing one.
+    var walk: WalkRefinement.Outcome? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -57,6 +63,19 @@ struct JourneyAlternativeRow: View {
                     Text("sale \(WaitTime(minutes: live.minutes).inlineText)")
                         .font(.caption2.monospacedDigit())
                 }
+            }
+            // B3. The measured walk, when it disagrees with the estimate enough to matter.
+            // First of the two extra lines, because "you cannot reach this bus" outranks
+            // anything the countdown has to say about it.
+            if let walk, walk.boardingUnreachable {
+                Label(unreachableText(walk), systemImage: "figure.walk.motion")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+            } else if let walk, let spare = walk.secondsToSpare, spare < 120 {
+                Label("Justo: \(spare / 60) min para llegar a la parada",
+                      systemImage: "figure.walk")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             // D1. What the countdown implies for the rest of the journey. Absent unless the
             // bus is meaningfully off schedule, so the common case adds no chrome.
@@ -96,6 +115,16 @@ struct JourneyAlternativeRow: View {
 
     private var durationText: String {
         WaitTime(minutes: max(0, Int(journey.duration / 60))).inlineText
+    }
+
+    /// Says by how much, not just that. "No llegas" alone invites the user to argue with it;
+    /// "te faltan 3 min" is checkable against their own sense of the walk.
+    private func unreachableText(_ walk: WalkRefinement.Outcome) -> String {
+        guard let spare = walk.secondsToSpare, spare < 0 else {
+            return "No te da tiempo a llegar a la parada"
+        }
+        let minutes = max(1, Int((Double(-spare) / 60).rounded()))
+        return "No llegas: te faltan \(minutes) min hasta la parada"
     }
 
     private func delayText(_ adjustment: LiveJourneyAdjustment.Adjustment) -> String {

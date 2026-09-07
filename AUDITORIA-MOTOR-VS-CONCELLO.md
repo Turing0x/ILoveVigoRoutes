@@ -517,7 +517,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | C2 · Rebarrido de salidas | ❌ **retirado — medido, no hacía falta** | — |
 | C3 · Modo silla de ruedas | ✅ hecho | `c3` |
 | D1 · Tiempo real en la primera pierna | ✅ hecho (parcialmente ya existía) | `d1` |
-| B3 · MKDirections en acceso/egreso | pendiente | |
+| B3 · MKDirections en acceso/egreso | ✅ hecho | `b3` |
 | B4 · Radio en minutos | ✅ hecho | `b4` |
 | Tests diferenciales contra OTP | pendiente | |
 
@@ -977,6 +977,55 @@ otro lado — la caminata que implica el borde del radio es exactamente el presu
 dos perfiles.
 
 **Verificación.** 464 tests en 54 suites, verde. Cinco nuevos. La app compila.
+
+### B3 — Los dos extremos, medidos de verdad ✅
+
+La última pieza de F-2. B2 resolvió los transbordos midiéndolos todos fuera de línea, que
+funciona porque los dos extremos se conocen de antemano. Estos dos no: uno de los extremos está
+donde esté el usuario. Seguían siendo línea recta por un factor, con el ±30 % de error que
+documenta B1.
+
+**Se anota, no se planifica.** Refinar *antes* de buscar significaría una llamada de red por
+cada parada candidata —hasta cien— antes de poder enseñar nada, y ninguna respuesta sin
+cobertura. Refinar después cuesta como mucho dos consultas por trayecto mostrado, ocurre con
+los resultados ya en pantalla, y deja la app funcionando sin red igual que hoy. Es la misma
+forma que `FirstBoardingLive` usa para el tiempo real, por los mismos motivos.
+
+**A qué extremo va cada diferencia** — la parte fácil de confundir:
+
+| Diferencia | Qué mueve |
+|---|---|
+| Acceso más largo | **La salida, hacia atrás.** El autobús sale cuando sale; la diferencia entera sale del tiempo del viajero |
+| Salida (egreso) más larga | **La llegada.** El bus ya te dejó; lo que falta es tu caminata |
+
+**Y lo que cierra el círculo de toda esta auditoría:** cuando la caminata real ya no cabe antes
+de que salga el autobús, la fila lo dice — «No llegas: te faltan 3 min hasta la parada». Ése
+es exactamente el fallo con el que empezó todo, el de Subida ás Chans (§3, F-2): un acceso
+subestimado que ofrece un autobús imposible de coger.
+
+Dice **cuánto**, no sólo que sí o que no: «no llegas» a secas invita a discutir con la app;
+«te faltan 3 min» es contrastable con el propio criterio de quien lo lee. Y llegar justo cuando
+sale **no** es no llegar: decirle a alguien que no puede coger un autobús que sale exactamente
+cuando aparece es peor error que decirle que va justo.
+
+**Cuidado con la fuente.** `MKDirections` es un servicio de red con límite de uso no
+documentado, y la lista se refresca cada vez que se cambia de criterio o se reordena. El
+enrutador es un `actor` con:
+
+- **caché** con coordenadas redondeadas a 4 decimales (~11 m), porque el origen suele ser la
+  posición del dispositivo y salta unos metros entre lecturas — sin redondear, la caché fallaría
+  en cada refresco;
+- **los fallos también se cachean**, a propósito: una caminata que MapKit se negó a enrutar una
+  vez se negará otra, y volver a preguntar gastaría el límite en una pregunta ya respondida;
+- **techo de cuatro** consultas simultáneas, que es lo que caben en pantalla;
+- **tope de 3 km**: ningún autobús se coge al final de una caminata de cuarenta minutos.
+
+Todo fallo devuelve `nil`, nunca un error. Un enrutador que falla tiene que degradar la app
+exactamente a lo que hacía antes de existir.
+
+**Verificación.** 476 tests en 55 suites, verde. Doce nuevos, incluido el contrato de degradar
+(un enrutador mudo no cambia absolutamente nada) y el caso del autobús inalcanzable. La app
+compila; hubo que regenerar el proyecto con `xcodegen` al añadir ficheros nuevos.
 
 ### B1 — Factores de detour asimétricos ✅
 

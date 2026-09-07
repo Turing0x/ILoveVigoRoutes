@@ -28,6 +28,10 @@ struct MapScreen: View {
         span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)))
     @State private var selection: MapSelection<StopID>?
     @State private var live: FirstBoardingLive?
+    /// Measured walking times for the alternatives on screen (B3). Held here beside `live`
+    /// because it has the same lifecycle: it belongs to what is being looked at, and stops
+    /// the moment the screen goes away.
+    @State private var walks: WalkRefinementLive?
     /// Which detent the sheet is showing.
     ///
     /// Bound rather than left to the system: `presentationDetents` on its own opens at the
@@ -70,6 +74,9 @@ struct MapScreen: View {
             if live == nil {
                 live = FirstBoardingLive(arrivals: environment.arrivals)
             }
+            if walks == nil {
+                walks = WalkRefinementLive(router: environment.walkRouter)
+            }
             await model?.loadStops()
             // The request may have arrived before this screen existed — Favourites can be the
             // first tab touched on a cold start.
@@ -92,6 +99,7 @@ struct MapScreen: View {
         .onDisappear {
             environment.location.release(locationHolder)
             live?.cancel()
+            walks?.cancel()
             // Leaving the tab must not leave the screen pinned awake.
             UIApplication.shared.isIdleTimerDisabled = false
         }
@@ -222,6 +230,7 @@ struct MapScreen: View {
                 // asking the realtime source about journeys nobody is looking at would be
                 // exactly the polling §8 of the handoff rules out.
                 live?.refresh(for: model.state.visibleJourneys)
+                walks?.refresh(for: model.state.visibleJourneys)
             }
             // Framing follows the answer, not the question: as soon as there are routes, the
             // camera opens on all of them rather than staying on the destination pin.
@@ -313,6 +322,7 @@ struct MapScreen: View {
                 plannedAt: model.plannedAt,
                 live: { live?.match(for: $0) },
                 liveAdjustment: { journey, now in live?.adjustment(for: journey, now: now) },
+                walkRefinement: { journey, now in walks?.outcome(for: journey, now: now) },
                 onPick: { role, place in
                     Task {
                         switch role {

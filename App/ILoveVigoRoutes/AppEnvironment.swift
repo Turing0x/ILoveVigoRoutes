@@ -30,6 +30,13 @@ final class AppEnvironment {
     /// initialiser call.
     let placeResolver: any MapPlaceResolving = MapKitPlaceResolver()
     private let timetableStore: TimetableStore
+
+    /// Measures walking legs on the real street network (B3).
+    ///
+    /// One instance for the whole app, because its value is its cache: the same walk gets
+    /// asked about again on every re-plan, reorder and criterion change, and a per-screen
+    /// router would spend the rate limit re-answering questions it had already answered.
+    let walkRouter = MapKitWalkRouter()
     private let throttledRealtime: ThrottledRealtimeProvider
 
     /// A saved journey that some other tab asked the map to plan, waiting to be consumed.

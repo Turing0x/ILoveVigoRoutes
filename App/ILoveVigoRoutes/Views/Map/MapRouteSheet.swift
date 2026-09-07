@@ -17,6 +17,9 @@ struct MapRouteSheet: View {
     /// What that countdown implies for the rest of the journey (D1). Takes the sheet's own
     /// `now`, so the countdown and the arrival it implies are computed against one instant.
     let liveAdjustment: (Journey, Date) -> LiveJourneyAdjustment.Adjustment?
+    /// What the *measured* access and egress walks imply (B3), once they are known. `nil`
+    /// until then, and `nil` forever without a network — the estimate stands either way.
+    let walkRefinement: (Journey, Date) -> WalkRefinement.Outcome?
     let onPick: (PlacePickerRole, MapPlace) -> Void
     let onSwap: () -> Void
     let onDeparture: (MapNavigationState.Departure) -> Void
@@ -224,7 +227,8 @@ struct MapRouteSheet: View {
                         HStack(spacing: 10) {
                             JourneyAlternativeRow(journey: journey, live: live(journey),
                                                   hasDeparted: gone,
-                                                  adjustment: liveAdjustment(journey, now))
+                                                  adjustment: liveAdjustment(journey, now),
+                                                  walk: walkRefinement(journey, now))
                             if index == state.selectedAlternative {
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
