@@ -519,7 +519,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | D1 · Tiempo real en la primera pierna | ✅ hecho (parcialmente ya existía) | `d1` |
 | B3 · MKDirections en acceso/egreso | ✅ hecho | `b3` |
 | B4 · Radio en minutos | ✅ hecho | `b4` |
-| Tests diferenciales contra OTP | pendiente | |
+| Tests diferenciales contra OTP | ✅ hecho | `diff` |
 
 ### A0 — Pendiente, y es tuyo
 
@@ -1026,6 +1026,60 @@ exactamente a lo que hacía antes de existir.
 **Verificación.** 476 tests en 55 suites, verde. Doce nuevos, incluido el contrato de degradar
 (un enrutador mudo no cambia absolutamente nada) y el caso del autobús inalcanzable. La app
 compila; hubo que regenerar el proyecto con `xcodegen` al añadir ficheros nuevos.
+
+### Tests diferenciales contra OTP ✅
+
+Lo que convierte «me sigue fallando» en un número que sube o baja con cada cambio.
+
+`BruteForceReference` ya comprueba que RAPTOR encuentra el óptimo **del horario que le den**. No
+puede comprobar si ese horario, esas caminatas y esas reglas de transbordo suman una respuesta
+que una persona reconocería. El OTP del Concello corre sobre el mismo GTFS de Vitrasa (§2.4),
+así que es la única implementación independiente de este problema exacto que existe.
+
+**Primera ejecución, seis pares a las 09:00:**
+
+```
+  Príncipe → H. Álvaro Cunqueiro   nuestra 09:40  suya 09:40  Δ  +0 min
+  Samil → Urzáiz                   nuestra 09:51  suya 09:49  Δ  +2 min
+  Camelias → Samil                 nuestra 09:25  suya 09:43  Δ −18 min
+  Bembrive → centro                nuestra 09:56  suya 09:56  Δ  +0 min
+  Navia → Praza de América         nuestra 09:27  suya 09:38  Δ −11 min
+  Teis → Bouzas                    nuestra 09:45  suya 09:46  Δ  −1 min
+
+  |Δ| mediana 2,3 min,  peor 17,6 min,  n=6
+```
+
+Y el segundo test —donde ellos encuentran ruta, nosotros también— pasa en los seis.
+
+**Cómo se lee una divergencia, con el caso de −18 min.** Llegar *antes* no es evidentemente
+mejor: es exactamente lo que parece un modelo de caminata demasiado optimista. Así que fui a
+comprobarlo contra el feed crudo:
+
+> Nuestra respuesta: **12A** desde Avda. das Camelias 80 (9:04) hasta Avda. de Europa,
+> transbordo al **15A** (9:19), bajada en **Avda. de Europa 102** — que está a **152 m** del
+> destino. Todas las piernas existen en `stop_times.txt` a esas horas.
+>
+> OTP no devuelve ese itinerario con ningún `walkReluctance` que le pedí; prefiere un directo
+> **caminando 1.757 m**.
+
+La divergencia era real y la nuestra era correcta. Ése es el propósito del banco: no coincidir,
+sino hacer la divergencia lo bastante visible como para ir a mirarla.
+
+**Cómo se usa.** Doblemente opcional, porque toca infraestructura pública de un tercero:
+
+```bash
+VIGO_GTFS_ZIP=/ruta/gtfs_vigo.zip VIGO_OTP_DIFF=1 swift test --filter OTPDifferential
+```
+
+Seis pares, uno cada vez, espaciados. No forma parte de ninguna ejecución normal y no es asunto
+de CI. Un barrido masivo no cabe aquí.
+
+**Los umbrales son un trinquete, no una especificación.** Mediana ≤ 15 min, ningún par > 45 min.
+Los dos motores optimizan cosas distintas —un coste escalar frente a un frente de Pareto— y no
+van a coincidir exactamente ni deben forzarse a ello. Lo que esto atrapa es una regresión que
+nos vuelva sistemáticamente peores: que la mejor llegada se separe media hora de la suya
+significa que algo del calendario, del modelo de caminata o de las reglas de transbordo se ha
+roto, no que hayamos elegido otro autobús.
 
 ### B1 — Factores de detour asimétricos ✅
 
