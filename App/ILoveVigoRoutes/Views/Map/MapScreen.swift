@@ -18,7 +18,11 @@ import VigoCore
 struct MapScreen: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: MapScreenModel?
-    @State private var location = LocationProvider()
+    /// This screen's lease on the app's single `CLLocationManager` (H-50). `@State` so SwiftUI
+    /// keeps the first `UUID` it is given for this view's identity — the initialiser still runs
+    /// on every body re-evaluation, but a `UUID()` costs nanoseconds where a
+    /// `LocationProvider()` cost a trip to `locationd`.
+    @State private var locationHolder = LocationDemand.Holder()
     @State private var camera: MapCameraPosition = .region(MKCoordinateRegion(
         center: LocationProvider.vigoCentre,
         span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)))
@@ -41,7 +45,9 @@ struct MapScreen: View {
     /// `CLLocationCoordinate2D` is not `Equatable`, so `onChange` cannot watch it directly.
     /// `Coordinate` is, and it is the type the rest of the flow speaks anyway.
     private var currentCoordinate: Coordinate? {
-        location.coordinate.map { Coordinate(latitude: $0.latitude, longitude: $0.longitude) }
+        environment.location.coordinate.map {
+            Coordinate(latitude: $0.latitude, longitude: $0.longitude)
+        }
     }
 
     var body: some View {
@@ -64,15 +70,15 @@ struct MapScreen: View {
             if live == nil {
                 live = FirstBoardingLive(arrivals: environment.arrivals)
             }
-            model?.loadStops()
+            await model?.loadStops()
             // The request may have arrived before this screen existed — Favourites can be the
             // first tab touched on a cold start.
             if let requested = environment.consumePendingSavedJourney() {
                 await model?.route(savedJourney: requested)
             }
-            location.requestPermissionIfNeeded()
-            location.start()
-            if let coordinate = location.coordinate {
+            environment.location.requestPermissionIfNeeded()
+            environment.location.acquire(locationHolder)
+            if let coordinate = environment.location.coordinate {
                 camera = .region(MKCoordinateRegion(
                     center: coordinate,
                     span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)))
@@ -84,12 +90,14 @@ struct MapScreen: View {
             if let new { model?.updateCurrentLocation(new) }
         }
         .onDisappear {
-            location.stop()
+            environment.location.release(locationHolder)
             live?.cancel()
             // Leaving the tab must not leave the screen pinned awake.
             UIApplication.shared.isIdleTimerDisabled = false
         }
-        .onChange(of: environment.feedStatus.importedAt) { model?.loadStops() }
+        .onChange(of: environment.feedStatus.importedAt) {
+            Task { await model?.loadStops() }
+        }
     }
 
     @ViewBuilder
@@ -175,8 +183,24 @@ struct MapScreen: View {
             }
             // The sheet's height is part of what each mode means: a card is useless with its
             // actions hidden, a search wants the whole screen, and following wants the map.
+            //
+            // Only for the modes that present a sheet, and only when the height really differs
+            // (H-49). This used to run for *every* mode change, including the presenting ones,
+            // and `.onChange` fires after the update in which the value changed — one update
+            // too late, with the presentation already committed. The sheet was therefore
+            // presented at whatever height the previous mode left behind and then animated to
+            // the right one: two transitions where one was wanted, with the `.searchable` field
+            // and the toolbar installed into a container that was momentarily zero-wide. That
+            // is the `UIView-Encapsulated-Layout-Width == 0` constraint conflict, and the stall
+            // behind `Gesture: System gesture gate timed out`, on a real iPhone.
+            //
+            // The presenting transitions set their own height before they present now. What is
+            // left here is the mode changes that happen *underneath* a sheet that is already up
+            // — `.searching → .place` when a result is picked, `.place → .routing` — where a
+            // single animated resize is exactly what is wanted.
             .onChange(of: model.state.mode) { _, mode in
-                detent = defaultDetent(for: mode)
+                guard let wanted = defaultDetent(for: mode), wanted != detent else { return }
+                detent = wanted
             }
             .onChange(of: model.state.isFollowing) { _, following in
                 applyFollowing(following)
@@ -217,10 +241,35 @@ struct MapScreen: View {
             .overlay(alignment: .bottom) { followingBanner(model) }
             // Only while browsing: once a card or a route is up, the sheet is the way in and
             // a second search affordance underneath it would be a second front door.
+            //
+            // Hidden rather than removed (H-51). Adding and removing a `safeAreaInset` is a
+            // full `MKMapView` layout pass plus a change to the visible region, so the instant
+            // the sheet was presented was also a camera-change instant: `onMapCameraChange`
+            // below fired `viewportChanged` → `recomputeLayer()` on the main actor while UIKit
+            // was installing a `NavigationStack`, a search bar and a toolbar into a brand new
+            // presentation container. Keeping the inset constant costs ~50 pt of bottom inset
+            // while a sheet is up — inside the margin `focus(on:)` and `frame(journeys:traces:)`
+            // already compensate for, and constant, so it is no longer something their lift has
+            // to be right about *while it changes*.
+            //
+            // `accessibilityHidden` is not optional here: a button at zero opacity is still
+            // focusable by VoiceOver, and a hidden "Buscar en el mapa" that swipes into focus
+            // over a route card would be trading a stutter for a regression.
             .safeAreaInset(edge: .bottom) {
-                if model.state.mode == .browsing {
-                    MapBrowseBar { model.beginSearch() }
+                MapBrowseBar {
+                    // H-49: the height first, the mode second, both in one transaction.
+                    //
+                    // `beginSearch()` is what presents the sheet, and the presentation reads
+                    // `detent` at that instant. Leaving the height to the `.onChange` above
+                    // meant the sheet opened at the card height and was then animated to
+                    // `.large`. Written here, both land in the same SwiftUI update, so the
+                    // sheet is built already knowing it wants the whole screen.
+                    if let wanted = defaultDetent(for: .searching) { detent = wanted }
+                    model.beginSearch()
                 }
+                .opacity(model.state.mode == .browsing ? 1 : 0)
+                .allowsHitTesting(model.state.mode == .browsing)
+                .accessibilityHidden(model.state.mode != .browsing)
             }
             // One sheet for the whole flow, switched by mode. Presenting a second sheet
             // over the first would stack two cards for what is one continuous journey from
@@ -228,11 +277,20 @@ struct MapScreen: View {
             .sheet(isPresented: Binding(
                 get: { model.state.mode != .browsing },
                 set: { if !$0 { dismissSheet(model) } }
-            )) {
+            ), onDismiss: {
+                // Back to the height every card presentation wants, once the sheet is gone.
+                //
+                // The next presentation reads `detent` at the instant it is made, so leaving
+                // `.large` behind after a search would open the *next* place card full screen
+                // and then shrink it — H-49 again, by way of a tap on a marker instead of the
+                // search bar. `onDismiss` and not `dismissSheet` deliberately: this runs after
+                // the dismissal animation, so it cannot resize a sheet still on its way out.
+                detent = .fraction(sheetFraction)
+            }) {
                 sheetContent(model)
                     .presentationDetents([.height(sheetPeek), .fraction(sheetFraction), .large],
                                          selection: $detent)
-                    .presentationBackgroundInteraction(.enabled(upThrough: .fraction(sheetFraction)))
+                    .presentationBackgroundInteraction(backgroundInteraction(model))
                     .presentationDragIndicator(.visible)
             }
         }
@@ -311,12 +369,27 @@ struct MapScreen: View {
             span: region.span))
     }
 
-    private func defaultDetent(for mode: MapNavigationState.Mode) -> PresentationDetent {
+    /// The height a mode wants, or `nil` for a mode that shows no sheet at all.
+    ///
+    /// `.browsing` used to answer `.height(sheetPeek)`, which was never a height anything was
+    /// ever drawn at — the sheet is not presented in that mode — and only served to resize the
+    /// sheet on its way out (H-49).
+    private func defaultDetent(for mode: MapNavigationState.Mode) -> PresentationDetent? {
         switch mode {
         case .searching: .large
         case .place, .routing, .journeyDetail: .fraction(sheetFraction)
-        case .browsing: .height(sheetPeek)
+        case .browsing: nil
         }
+    }
+
+    /// The map stays live and touchable behind a *card* — that is the Apple Maps shape, and
+    /// half the reason the card is a sheet at all. Behind a full-screen search it is neither:
+    /// there is nothing visible to touch, and keeping the map hosted underneath is what leaves
+    /// MapKit rendering into a zero-sized drawable while the sheet grows over it — the
+    /// `CAMetalLayer ignoring invalid setDrawableSize width=0.000000` in the device log (H-52).
+    private func backgroundInteraction(_ model: MapScreenModel) -> PresentationBackgroundInteraction {
+        model.state.mode == .searching ? .disabled
+                                       : .enabled(upThrough: .fraction(sheetFraction))
     }
 
     /// Everything follow mode actually costs, switched on and off in one place.
@@ -328,7 +401,7 @@ struct MapScreen: View {
     private func applyFollowing(_ following: Bool) {
         UIApplication.shared.isIdleTimerDisabled = following
         if following {
-            location.start(accuracy: kCLLocationAccuracyBest)
+            environment.location.acquire(locationHolder, precision: .fine)
             camera = .userLocation(followsHeading: true,
                                    fallback: .region(MKCoordinateRegion(
                                        center: LocationProvider.vigoCentre,
@@ -336,8 +409,11 @@ struct MapScreen: View {
                                                               longitudeDelta: 0.01))))
             detent = .height(sheetPeek)
         } else {
-            location.stop()
-            location.start()
+            // Back to coarse, not off: this screen still wants a position. The old
+            // `stop(); start()` here was a downgrade dressed as a reset — `start()`'s default
+            // accuracy silently replaced the fine one — and it stopped a manager the search
+            // sheet over this map might still have been using (H-50).
+            environment.location.acquire(locationHolder, precision: .coarse)
         }
     }
 
@@ -401,13 +477,14 @@ struct MapScreen: View {
             Button {
                 recentreOnUser()
             } label: {
-                Image(systemName: location.isAuthorized ? "location.fill" : "location.slash")
+                Image(systemName: environment.location.isAuthorized ? "location.fill"
+                                                                    : "location.slash")
                     .font(.title3)
                     .frame(width: 24, height: 24)
                     .padding(9)
                     .background(.regularMaterial, in: Circle())
             }
-            .disabled(!location.isAuthorized)
+            .disabled(!environment.location.isAuthorized)
             .accessibilityLabel("Centrar en mi ubicación")
 
             Menu {

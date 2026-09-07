@@ -92,11 +92,13 @@ public struct JourneyPlanner: Sendable {
         let timetable = try await store.timetable(anchor: day)
         let accessWalks = access.compactMap { nearby -> StopWalk? in
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
-            return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres)))
+            return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres,
+                                                                     as: .accessEgress)))
         }
         let egressWalks = egress.compactMap { nearby -> StopWalk? in
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
-            return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres)))
+            return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres,
+                                                                     as: .accessEgress)))
         }
         // RAPTOR is pure CPU, and `scan` runs it up to `maxDepartureScans` times in a row
         // with no suspension point in between. `plan` itself is not actor-isolated, so
@@ -111,7 +113,8 @@ public struct JourneyPlanner: Sendable {
         // A direct walk has no radius limit of its own, but one that would take longer than
         // the bus search is willing to look is not a "faster than the bus" fallback — it is
         // the same "nothing reasonable found" as an empty bus search.
-        let directWalkSeconds = walk.seconds(from: originCoordinate, to: destinationCoordinate)
+        let directWalkSeconds = walk.seconds(from: originCoordinate, to: destinationCoordinate,
+                                             as: .accessEgress)
         let walkIsViable = TimeInterval(directWalkSeconds) <= options.searchHorizon
         func walkOnlyJourney() -> Journey {
             Journey(legs: [.walk(from: query.origin, to: query.destination,

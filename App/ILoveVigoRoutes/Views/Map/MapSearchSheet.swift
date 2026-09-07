@@ -47,18 +47,24 @@ struct MapSearchSheet: View {
     /// made. Presented from the route sheet it is a nested sheet that really does close.
     let onCancel: () -> Void
     /// Resolves a coordinate to a street name. Injectable so a test could stub it; the app
-    /// always uses the real geocoder — the same one `MapScreenModel` uses for a long press,
-    /// so "Elegir en el mapa" (H-33) stops being the one drop-a-pin path that never names
-    /// the point it drops.
-    var resolver: any MapPlaceResolving = MapKitPlaceResolver()
+    /// otherwise uses the one on `AppEnvironment` — the same geocoder `MapScreenModel` uses for
+    /// a long press, so "Elegir en el mapa" (H-33) stops being the one drop-a-pin path that
+    /// never names the point it drops.
+    ///
+    /// Optional rather than a `MapKitPlaceResolver()` default argument (H-50): a default
+    /// argument is evaluated on every initialiser call, and this view's initialiser runs on
+    /// every re-evaluation of whichever body presents it — a fresh `CLGeocoder` per update tick.
+    var resolver: (any MapPlaceResolving)?
 
     @State private var query = ""
     @State private var results: [Stop] = []
     @State private var addresses: AddressSearchModel?
     /// Only needed for the "Mi ubicación" row and the distance shown nowhere else in this
-    /// sheet — a second `CLLocationManager` alongside the map's own while this is presented
-    /// over it, same as `PlacePickerView` used to run alongside `MapScreen`.
-    @State private var location = LocationProvider()
+    /// sheet — a lease on the app's single manager rather than a second one of its own (H-50).
+    /// Presented over the map, this sheet used to run a `CLLocationManager` alongside the
+    /// map's, and the map's `onDisappear` does not fire under a sheet, so both stayed live;
+    /// worse, the eager `LocationProvider()` initialiser here rebuilt one on every update tick.
+    @State private var locationHolder = LocationDemand.Holder()
     @State private var showingMapPicker = false
     @State private var resolvingDroppedPin = false
     @State private var savingPlaceFrom: Place?
@@ -90,8 +96,8 @@ struct MapSearchSheet: View {
         }
         .task {
             if addresses == nil { addresses = AddressSearchModel(service: environment.addressSearch) }
-            location.requestPermissionIfNeeded()
-            location.start()
+            environment.location.requestPermissionIfNeeded()
+            environment.location.acquire(locationHolder)
         }
         .task {
             let repository = environment.repository
@@ -100,7 +106,7 @@ struct MapSearchSheet: View {
             }.value
         }
         .task(id: roundedCoordinate) {
-            guard let coordinate = location.coordinate else { return }
+            guard let coordinate = environment.location.coordinate else { return }
             let repository = environment.repository
             nearby = await Task.detached(priority: .userInitiated) {
                 (try? repository.nearbyStops(latitude: coordinate.latitude,
@@ -124,14 +130,15 @@ struct MapSearchSheet: View {
         }
         .onDisappear {
             addresses?.cancel()
-            location.stop()
+            environment.location.release(locationHolder)
         }
         .sheet(isPresented: $showingMapPicker) {
             MapPointPickerView { coordinate in
                 let point = Coordinate(latitude: coordinate.latitude, longitude: coordinate.longitude)
                 resolvingDroppedPin = true
                 Task {
-                    let resolved = await resolver.resolve(coordinate: point)
+                    let resolved = await (resolver ?? environment.placeResolver)
+                        .resolve(coordinate: point)
                     resolvingDroppedPin = false
                     pick(.droppedPin(point, name: resolved.name, subtitle: resolved.subtitle))
                 }
@@ -184,7 +191,7 @@ struct MapSearchSheet: View {
                 } label: {
                     Label("Mi ubicación", systemImage: "location.fill")
                 }
-                .disabled(location.coordinate == nil)
+                .disabled(environment.location.coordinate == nil)
             }
             // Offered in every purpose, `.explore` included: it is the accessible route to
             // "drop a pin anywhere", the one thing the map's own long-press gesture cannot
@@ -198,7 +205,7 @@ struct MapSearchSheet: View {
     }
 
     private func pickCurrentLocation() {
-        guard let coordinate = location.coordinate else { return }
+        guard let coordinate = environment.location.coordinate else { return }
         pick(.currentLocation(Coordinate(latitude: coordinate.latitude,
                                          longitude: coordinate.longitude)))
     }
@@ -210,7 +217,7 @@ struct MapSearchSheet: View {
     /// reissuing its query on jitter alone. The task itself still reads the live coordinate,
     /// so the query is never stale — only *how often* it reruns is throttled here.
     private var roundedCoordinate: Coordinate? {
-        location.coordinate.map {
+        environment.location.coordinate.map {
             Coordinate(latitude: $0.latitude, longitude: $0.longitude).rounded(toDecimals: 4)
         }
     }
@@ -284,7 +291,7 @@ struct MapSearchSheet: View {
             Section("Cerca de ti") {
                 ForEach(nearby) { nearbyRow($0) }
             }
-        } else if environment.hasData, location.isDenied {
+        } else if environment.hasData, environment.location.isDenied {
             // H-29: an empty section that says nothing looks identical to "nobody is
             // nearby" — the two have very different fixes.
             Section("Cerca de ti") {

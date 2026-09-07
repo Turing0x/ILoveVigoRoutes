@@ -1,0 +1,595 @@
+# Motor de rutas: el del Concello frente al nuestro
+
+**Fecha:** 2026-09-07
+**Objeto analizado:** `base.apk` de la app oficial **Vigo+** (`org.vigo.apps.vigoplus`)
+**Método:** descompresión del APK, lectura de los *bundles* JavaScript, y **sondeo en vivo**
+del servidor de planificación del Concello y del GTFS público.
+
+> Todo lo que sigue está **observado**. Cada afirmación sobre el motor del Concello viene de
+> una cadena literal del APK o de una respuesta HTTP que reproduje. Donde no pude verificar
+> algo, lo digo.
+
+---
+
+## 1. Titular
+
+**La app del Concello no calcula rutas.** Es un cliente HTTP delgado sobre una instancia de
+**OpenTripPlanner** alojada por el Concello. Su motor "funciona perfecto" porque es OTP, un
+planificador maduro con dos cosas que nosotros no tenemos: **un grafo de calles reales** y un
+**calendario de 94 días**.
+
+Y una corrección a la premisa de partida: **su planificador no combina bus + ferry**. Sólo
+tiene autobús. Verificado abajo.
+
+El diagnóstico de nuestro motor, en una frase: **el algoritmo es correcto; las entradas que le
+damos no lo son.**
+
+---
+
+## 2. FASE 1 — El motor del Concello
+
+### 2.1 Qué es la app
+
+Híbrida **Cordova + Angular**. `assets/www/` con 662 *chunks* de JavaScript y
+`org/apache/cordova/` en el `classes.dex`. No hay lógica de planificación en Java/Kotlin: está
+toda en JS, y la que hay es de *presentación*.
+
+### 2.2 El planificador es OpenTripPlanner
+
+De `main.f6c6fb8dff62506e.js`, el objeto de entorno:
+
+```js
+otpUrl:       "https://planificador-rutas-api.vigo.org/v1/",
+otpRoutesUrl: "https://planificador-rutas.vigo.org/otp/routers/default/plan"
+```
+
+`/otp/routers/default/plan` es la **API REST de OTP 1.x**, literal.
+
+Sondeo en vivo de `/otp/routers/default` (respuesta real, 2026-09-07):
+
+```json
+{"routerId":"default","buildTime":1788652963273,
+ "transitServiceStarts":1787176800,"transitServiceEnds":1795302000,
+ "transitModes":["BUS"],
+ "travelOptions":[{"value":"TRANSIT,WALK"},{"value":"BUS,WALK"},{"value":"WALK"},
+                  {"value":"BICYCLE"},{"value":"CAR"},{"value":"TRANSIT,BICYCLE"},
+                  {"value":"CAR_PARK,WALK,TRANSIT"},{"value":"CAR,WALK,TRANSIT"}],
+ "hasCarPark":true,"hasParkRide":true}
+```
+
+- `travelOptions` con `PARKRIDE`/`KISSRIDE`, y los parámetros `optimize=TRIANGLE` y
+  `maxWalkDistance` que envía el cliente, fijan la versión: **OTP 1.x** (RAPTOR entra en OTP 2).
+- **Grafo construido el 2026-09-06.**
+- **Ventana de servicio: 2026-08-19 → 2026-11-21. 94 días.**
+- **`transitModes: ["BUS"]`.** No hay ferry, ni tren, ni bus interurbano.
+
+### 2.3 Qué algoritmo es entonces
+
+OTP 1.x resuelve con **A\* bidireccional sobre un grafo multimodal dependiente del tiempo**:
+callejero peatonal de OSM + red de tránsito del GTFS, en un único grafo, con **coste
+generalizado** (segundos "percibidos", no segundos reales). No es RAPTOR. No es Dijkstra puro.
+Las alternativas (`numItineraries`) salen de búsquedas repetidas penalizando lo ya encontrado.
+
+Lo relevante para nosotros no es el A\*: es que **el peatón se mueve por calles reales**.
+
+### 2.4 La fuente de datos: la misma que la nuestra
+
+```
+GET /otp/routers/default/index/feeds   →  ["1"]
+GET /otp/routers/default/index/routes  →  43 rutas, agencyName: "Viguesa de Transportes S.L."
+```
+
+Un solo feed. Vitrasa. **43 rutas con viajes** — exactamente las 59 de `routes.txt` menos las
+16 sin viajes que ya documentamos en `DATA-SOURCES.md` §2.6. Es **nuestro mismo GTFS**.
+
+No tienen datos que nosotros no tengamos. Tienen el mismo dato, mejor tratado.
+
+### 2.5 Qué envía exactamente el cliente
+
+De `23172.028ce2b9e788c171.js`, el servicio OTP:
+
+```js
+routeRequest(d, h, _, L) {
+  let R = new HttpParams()
+    .set("fromPlace", d.fromPlace).set("toPlace", d.toPlace)
+    .set("arriveBy", d.arriveBy.toString())
+    .set("date", d.date).set("time", d.time).set("locale", L)
+    .set("showIntermediateStops", "true")
+    .set("mode", _)
+    .set("numItineraries", 4);
+  // h = opciones del perfil, mezcladas encima
+}
+```
+
+Y hace **cuatro peticiones en paralelo**, una por pestaña de la UI:
+
+```js
+{ bus:     routeRequest(d, h.bus,     "TRANSIT"),
+  walk:    routeRequest(d, h.walk,    "WALK"),
+  bicycle: routeRequest(d, h.bicycle, "BICYCLE"),
+  all:     routeRequest(d, h.all,     "TRANSIT, WALK") }
+```
+
+**Perfiles de itinerario** (esto es lo interesante — son pesos de coste generalizado):
+
+| Perfil UI | Parámetros OTP |
+|---|---|
+| `fast` — "Más rápido" | `optimize=QUICK`, `walkReluctance=10` |
+| `fewerTransfers` — "Menos transbordos" | `walkBoardCost=1500`, `transferPenalty=600` |
+| `lessWalk` — "Menos caminata" | `walkReluctance=35`, `bikeReluctance=15` |
+| Silla de ruedas | `wheelchair=true`, y **fuerza `walkReluctance=1`** |
+
+Velocidades de caminata: **normal 1.4 m/s, lenta 1.2 m/s**.
+
+Y un detalle de diseño que merece la pena copiar:
+
+```js
+maxWalkDistance: Math.round(this.speedAndTimeToMetersDistance(this.maxWalkTime(), this.walkSpeed().speed))
+```
+
+**El radio de caminata no es un número de metros: es un número de minutos**, convertido a
+metros con la velocidad que el usuario haya elegido. Quien anda despacio obtiene un radio más
+pequeño automáticamente. Nosotros tenemos `accessRadiusMetres = 800` fijo para todo el mundo.
+
+### 2.6 Cuánta inteligencia hay en el cliente: ninguna
+
+`orderItinerariesResult` es, entero, esto:
+
+```js
+h.walk.plan.itineraries.sort((a, b) => a.duration - b.duration)
+```
+
+Un `sort` por duración en cada pestaña, y `minDuration` para pintar barras. **Toda la decisión
+está en el servidor.** No hay dominancia, no hay Pareto, no hay criterios. El usuario elige
+pestaña (bus / a pie / bici / mixto) y perfil, y OTP devuelve 4 itinerarios ya ordenados por
+su coste generalizado.
+
+### 2.7 Geocodificación: Pelias
+
+```js
+basePath = otpUrl;               // https://planificador-rutas-api.vigo.org/v1/
+GET v1/autocomplete?text=…&layers=venue,address&lang=es
+GET v1/reverse?point.lat=…&point.lon=…&lang=es
+```
+
+`v1/autocomplete`, `v1/reverse`, `layers`, `point.lat` → es **Pelias**, el geocodificador que
+acompaña a OTP por defecto. Nosotros usamos MapKit, que para direcciones de Vigo es
+comparable o mejor. Aquí no perdemos.
+
+### 2.8 La ventana de 94 días, verificada
+
+Consultas reales al `/plan` del Concello, mismo par origen-destino, misma hora:
+
+| Fecha | Resultado |
+|---|---|
+| 08-09-2026 (mar) | 3 itinerarios |
+| **08-10-2026 (jue, +30 d)** | **3 itinerarios** |
+| **15-11-2026 (dom, +69 d)** | **1 itinerario** |
+
+Y comparando por día de la semana:
+
+| Consulta | Itinerarios devueltos |
+|---|---|
+| Sáb 12-09-2026 | `10:00→10:35 [18A+C3d]`, `10:15→10:39 [15B]` |
+| Sáb 14-11-2026 (+63 d) | `10:00→10:35 [18A+C3d]`, `10:15→10:39 [15B]` — **idéntico** |
+| Dom 13-09-2026 | `10:00→10:23 [15C]`, `10:06→10:32 [C3i]` |
+| Dom 15-11-2026 (+63 d) | idéntico al domingo cercano |
+| **Lun 12-10-2026 (Fiesta Nacional)** | **idéntico al DOMINGO**, no al lunes |
+
+Las dos últimas filas son la clave. Un lunes festivo devuelve el horario de domingo. Eso **no
+sale de una proyección semanal ingenua**: su grafo tiene un calendario real con festivos, de
+94 días. Nosotros tenemos 7.
+
+**Lo que no pude verificar:** de dónde sacan ese calendario. El ZIP público no lo tiene (§3.1).
+O Vitrasa les da un feed más largo, o lo componen ellos. Merece una pregunta al Concello antes
+de construir nada.
+
+---
+
+## 3. FASE 2 — Nuestro motor
+
+La arquitectura es buena y no la toco: RAPTOR por rondas sobre una `Timetable` precompilada,
+función pura de `(Timetable, RaptorQuery)`, verificada contra `BruteForceReference`. Los 19
+hallazgos de `AUDITORIA-RAPTOR.md` (H-01 … H-19) están corregidos en las cuatro tandas ya
+commiteadas.
+
+Y aun así falla. Estos son los motivos, y ninguno es un bug de RAPTOR.
+
+### F-1 · CRÍTICO — La ventana de 7 días
+
+Descarga del GTFS de hoy (`Last-Modified: Fri, 04 Sep 2026 06:00:56 GMT`), analizada:
+
+```
+calendar.txt        → 0 filas (sólo cabecera)
+calendar_dates.txt  → 702 filas, exception_type=1 todas
+                      7 fechas distintas: 20260905 … 20260911
+```
+
+| Fecha | Servicios | Viajes |
+|---|---:|---:|
+| 05/09 sáb | 64 | 1.104 |
+| 06/09 dom | 51 | 788 |
+| 07/09 lun | 114 | 1.803 |
+| … | | |
+| 11/09 vie | 121 | 1.838 |
+
+Siete días. Y `GTFSImporter.import` los destruye en cada refresco:
+
+```swift
+for table in ["stopRoute", "stopTime", "shapePoint", "trip",
+              "calendarDate", "calendarEntry", "route", "stop"] {
+    try db.execute(sql: "DELETE FROM \(table)")
+}
+```
+
+Es idempotente y limpio — y por eso **nunca acumulamos historia**. `JourneyPlanner` entonces:
+
+```swift
+guard let window = feedStatus.window, window.contains(day) else {
+    return finish(.outsideFeedWindow(reported), feedStatus: feedStatus)
+}
+```
+
+**Consecuencia observable:** cualquier consulta a más de 6 días vista devuelve
+`.outsideFeedWindow`. "¿Cómo voy al aeropuerto el día 20?" no tiene respuesta. El del Concello
+la tiene a 94 días.
+
+Esta es, con diferencia, la clase de fallo más amplia: no da una ruta mala, no da **ninguna**.
+
+### F-2 · CRÍTICO — La caminata es en línea recta
+
+`WalkModel` es haversine × `walkDetourFactor` (1.35), y el propio comentario lo asume:
+
+```swift
+/// Everything here is straight-line distance scaled by a detour factor. That is a
+/// deliberate limit, not an oversight
+```
+
+**Lo medí.** 14 pares de paradas reales separadas 150–800 m en línea recta, consultando el
+grafo OSM del propio OTP del Concello (`mode=WALK`) y comparando con nuestro modelo:
+
+| Recta (m) | Calle real (m) | Ratio | Nuestro ×1.35 | Error |
+|---:|---:|---:|---:|---:|
+| 459 | **855** | **1,86** | 620 | **−27,6 %** |
+| 450 | 772 | 1,72 | 608 | −21,3 % |
+| 439 | 731 | 1,66 | 593 | −18,9 % |
+| 733 | 1.105 | 1,51 | 989 | −10,5 % |
+| 408 | 549 | 1,35 | 550 | +0,2 % |
+| 320 | 375 | 1,17 | 432 | +15,0 % |
+| 593 | 623 | 1,05 | 801 | **+28,6 %** |
+| 447 | 468 | 1,05 | 604 | +29,1 % |
+
+```
+n=14   ratio real/recta:  min 1,05   p50 1,23   p90 1,66   máx 1,86   media 1,33
+```
+
+**La media está bien calibrada. La varianza no lo está.** 1,35 es un promedio excelente para
+un valor que en la práctica oscila entre 1,05 y 1,86.
+
+Traducido a lo que ve el usuario, con el peor caso de la tabla:
+
+> **Subida ás Chans → Estrada de Bembrive 3.** Recta 459 m. Calle real **855 m**.
+> Nuestro modelo: 620 m ÷ 1,33 m/s = **6 min 18 s**.
+> Realidad: 855 m ÷ 1,33 = **10 min 43 s**.
+> **Nos faltan 4 minutos y medio.** Le decimos al usuario que llega al autobús. No llega.
+
+Y el error simétrico, igual de real aunque menos visible: cuando sobreestimamos un 29 %,
+descartamos enlaces que sí se cogen, y la mejor opción **nunca se genera**.
+
+Esto es exactamente el síntoma de "por más que lo hemos refinado, me sigue fallando": no es un
+fallo del planificador, es que la entrada geométrica que le damos tiene ±30 % de ruido.
+
+Agravante local: Vigo tiene desnivel. `WalkModel` no lo modela en absoluto, y el ratio 1,86 de
+la primera fila es precisamente una subida.
+
+### F-3 · ALTO — La planificación no usa el tiempo real
+
+Tenemos `ConcelloRealtimeClient`, `ArrivalsService`, `ThrottledRealtimeProvider` y
+`ArrivalsCache`. `JourneyPlanner` no toca nada de eso: planifica sobre horario estático puro y
+muestra horas teóricas. Cuando un bus va con 6 minutos de retraso, el itinerario que
+enseñamos es falso — y peor, el transbordo que calculamos con 90 s de holgura ya no existe.
+
+Nota: el del Concello probablemente tampoco lo hace (no vi `GTFS-RT` en su grafo). **Aquí
+podemos ser mejores que ellos**, no sólo igualarlos.
+
+### F-4 · MEDIO — El frente de Pareto de cinco ejes casi no domina nada
+
+`JourneyShortlist.undominated` exige, para que A domine a B, que A gane o empate en **cinco**
+ejes (salida, primer embarque, llegada, transbordos, caminata final). Con cinco ejes casi
+ningún par se domina, así que el frente sale enorme, y entonces `cut` reparte plazas **por
+turnos rotatorios** entre los tres criterios.
+
+El resultado es una lista heterogénea por construcción: cuatro opciones elegidas cada una por
+un criterio distinto. El razonamiento del código es correcto y está bien argumentado — evita
+sesgar el conjunto por llegada. Pero el efecto práctico es que la lista no se lee como "estas
+son tus opciones ordenadas", que es lo que sí consigue OTP con **un coste escalar por perfil**.
+
+### F-5 · MEDIO — El rebarrido de salidas desperdicia pases
+
+`JourneyPlanner.scan` reinicia cada pase en `primer embarque + 1`, y `firstBoardingSeconds`
+toma el **mínimo de todo el lote**:
+
+```swift
+if earliest == nil || seconds < earliest! { earliest = seconds }
+```
+
+Si un itinerario del lote embarca muy pronto en una parada de acceso lejana, el siguiente pase
+arranca un segundo después de **ése**, y vuelve a encontrar casi lo mismo desde las paradas
+cercanas. Con `maxDepartureScans = 4`, gastar un pase así es caro.
+
+### F-6 · MEDIO — Footpaths: un salto, y ninguno en la ronda 0
+
+Documentado como H-10 y aceptado como latente. Con el dato de F-2 deja de ser tan latente: el
+radio de transbordo son **300 m en línea recta**, que con el p90 medido (1,66) son ~500 m
+reales. Nuestro colchón de transbordo es `minTransferSeconds 60 + footpathBufferSeconds 30`.
+En un transbordo de 300 m recta, el error de geometría se come el colchón entero.
+
+### F-7 · BAJO — No hay `transfers.txt`
+
+Confirmado en el feed. Ni ellos ni nosotros tenemos transbordos oficiales; ambos los
+inventamos por proximidad. No es una desventaja relativa, pero explica por qué ninguno de los
+dos acierta siempre en estaciones con varias dársenas.
+
+---
+
+## 4. FASE 3 — Comparación directa
+
+| | **Concello (OTP 1.x)** | **ILoveVigoRoutes (RAPTOR)** |
+|---|---|---|
+| Dónde se calcula | Servidor | Dispositivo |
+| Algoritmo | A\* multimodal, coste generalizado | RAPTOR por rondas, Pareto multi-eje |
+| Grafo peatonal | **OSM real (callejero)** | **Ninguno** — haversine × 1,35 |
+| Calendario | **94 días, con festivos** | **7 días** |
+| Fuente de tránsito | GTFS Vitrasa | GTFS Vitrasa — **la misma** |
+| Ferry | No | No |
+| Tiempo real | No | Disponible, **sin usar en el planificador** |
+| Radio de caminata | Minutos → metros, según velocidad del usuario | 800 m fijos |
+| Silla de ruedas | `wheelchair=true`, `walkReluctance=1` | **No implementado en el motor** |
+| Alternativas | 4 por coste escalar, por perfil | Frente Pareto + corte rotatorio |
+| Funciona sin red | No | **Sí** |
+| Accesibilidad de la UI | Pobre (según tu criterio) | Buena |
+
+### Qué hacen ellos que nosotros no
+
+1. **Enrutan al peatón por calles.** Es la diferencia de fondo. Todo lo demás es secundario.
+2. **Tienen calendario largo con festivos.**
+3. **Convierten preferencias en pesos de coste**, no en criterios de ordenación *a posteriori*.
+4. **Escalan el radio de caminata con la velocidad del usuario.**
+5. **Tienen modo silla de ruedas en el motor.**
+
+### Qué tenemos nosotros que ellos no
+
+Funcionamiento sin red, latencia cero, sin dependencia de infraestructura ajena, accesibilidad
+real en la UI, tiempo real disponible, y un motor verificado contra fuerza bruta. **No conviene
+tirar nada de esto para copiarlos.**
+
+### Por qué sigue fallando el nuestro pese a los ajustes
+
+Porque las cuatro tandas de la auditoría anterior corrigieron el **algoritmo**, y el problema
+está en los **datos que entran**: una geometría peatonal con ±30 % de error y un calendario de
+siete días. RAPTOR resuelve impecablemente el problema equivocado.
+
+---
+
+## 5. FASE 4 — Plan de cambios propuesto
+
+Priorizado por cuántos fallos reales corrige primero. **Nada de esto es portar OTP**, y nada
+toca la arquitectura SwiftUI + VigoCore + GRDB.
+
+### Tanda A — Ampliar la ventana de calendario *(corrige F-1)*
+
+Lo primero porque es la única clase de fallo en la que hoy **no damos ninguna respuesta**.
+
+- **A0 · Antes de escribir código: preguntar.** Su OTP tiene 94 días con festivos correctos, y
+  el ZIP público no. Ese dato existe. Una consulta a `datos.vigo.org` / Vitrasa puede ahorrar
+  toda esta tanda. **Hazlo primero.**
+- **A1 · Versionar el feed en lugar de borrarlo.** Tabla `feedVersion(id, importedAt,
+  windowStart, windowEnd)`, y columna de versión en `calendarDate` / `trip` / `stopTime`.
+  `GTFSImporter` deja de hacer `DELETE FROM` a ciegas: inserta una versión nueva y purga las
+  que caduquen por fecha (no por número). Con ~8 semanas retenidas cubrimos hacia atrás; hacia
+  adelante seguimos con 7 días, así que A1 **sólo** habilita A2.
+- **A2 · Proyección semanal etiquetada.** Para un día D fuera de cobertura real, usar el mismo
+  día de la semana de la última versión disponible, y marcar el `Journey` como **estimado**.
+  La UI ya tiene el vocabulario para esto (`DataProvenanceViews`): banda "horario estimado, no
+  confirmado". El README prohíbe la respuesta silenciosamente falsa, y esto la respeta.
+- **A3 · Calendario de festivos de Vigo.** JSON en el bundle, ~14 fechas al año. Un festivo se
+  proyecta con el patrón de **domingo**, no con el de su día de la semana. Sin A3, A2 miente en
+  Navidad, Reconquista y San Roque — que es exactamente cuando más se consulta.
+- **Riesgo a medir antes:** tamaño en disco. `stop_times` son ~8 MB por versión. Con 8
+  versiones son 64 MB, inaceptable. Mitigación obligatoria: deduplicar — la inmensa mayoría de
+  los viajes se repiten idénticos semana a semana, así que versionar sólo `calendarDate` y las
+  referencias, no los `stopTime`. **Medir esto antes de comprometerse a A1.**
+
+### Tanda B — Geometría de caminata real *(corrige F-2, F-6)*
+
+- **B1 · Hoy mismo, media hora: separar los factores de detour.** `walkDetourFactor` único →
+  dos números: `accessDetourFactor ≈ 1.50` y `transferDetourFactor = 1.35`.
+  Razón: subestimar el acceso hace perder el autobús (fallo visible y doloroso); sobreestimarlo
+  sólo descarta alguna opción. La asimetría de coste justifica un factor asimétrico.
+  **Es un parche, no la solución**, y hay que anotarlo como tal.
+- **B2 · Tabla de footpaths reales, precalculada y empaquetada.** 1.149 paradas; los pares a
+  menos de 400 m son unos pocos miles. Calcular **una vez, offline en tu máquina**, la
+  distancia peatonal real de cada par (con OSRM, Valhalla o un OTP local sobre el OSM de
+  Galicia), y enviar el resultado en el bundle como `footpaths.bin` (~100 KB).
+  `TimetableBuilder` lo carga en vez de llamar a `WalkModel.footpaths(stops:)`.
+  **Elimina F-2 en los transbordos por completo**, sin red, sin dependencia en ejecución, sin
+  coste de batería. Es la mejor relación impacto/riesgo de todo el plan.
+- **B3 · Acceso y egreso con `MKDirections`.** Origen y destino son puntos arbitrarios, no se
+  pueden precalcular. Pedir la caminata real **sólo para las 3–5 paradas candidatas finales**
+  (nunca para las 100 de `maxNearbyStops`), cachear por `(coordenada redondeada a 4 decimales,
+  stopID)`, y degradar al factor de B1 si no hay red o la petición falla. La UI ya sabe decir
+  "estimado".
+- **B4 · Radio en minutos, no en metros.** Copiar el diseño del Concello:
+  `accessRadiusMetres` deja de ser una constante y pasa a derivarse de un `maxWalkMinutes` y la
+  velocidad configurada. Cambio pequeño, y es lo que hace que el modo "camino despacio" sea
+  coherente de verdad.
+- **B5 · Pendiente (evaluar después de B2/B3).** Regla de Tobler sobre una malla de elevación
+  ligera. Vigo lo justifica, pero no antes de haber arreglado la planta.
+
+### Tanda C — Cómo se eligen y ordenan las alternativas *(corrige F-4, F-5)*
+
+- **C1 · Coste generalizado como criterio de corte, no como sustituto.**
+  `coste = t_vehículo + wR · t_pie + tP · transbordos + wtR · t_espera`.
+  `JourneyOrdering` se queda tal cual — es nuestra ventaja de UX y accesibilidad, y no se toca.
+  Lo que cambia es `JourneyShortlist.cut`: en lugar de la rueda rotatoria, cortar por el coste
+  generalizado **del criterio activo**. Pesos inspirados en los perfiles reales de OTP:
+
+  | Criterio nuestro | `walkReluctance` | `transferPenalty` |
+  |---|---:|---:|
+  | Llega antes | 1,0 | 0 s |
+  | Menos caminata | 3,5 | 300 s |
+  | Sale antes | 1,0 | 0 s (se mantiene el orden actual) |
+
+  Se conservan los tres criterios y desaparece la lista heterogénea.
+- **C2 · Arreglar el rebarrido.** `firstBoardingSeconds` deja de tomar el mínimo global del
+  lote: reiniciar por **parada de acceso**, o por el embarque del itinerario representante del
+  pase. Recupera pases hoy desperdiciados sin subir `maxDepartureScans`.
+- **C3 · Modo silla de ruedas en el motor.** `wheelchair_boarding` ya está en `stops.txt` y ya
+  lo importamos. Filtrar paradas no accesibles y bajar la reluctancia de caminata, igual que
+  ellos. **Presumimos de accesibilidad y este es el único punto donde el Concello nos gana en
+  ella.** Alto valor por poco código.
+
+### Tanda D — Tiempo real en la planificación *(corrige F-3)*
+
+- **D1 · Post-ajuste de la primera pierna.** Tras reconstruir, consultar `api2.jsp` para la
+  parada de embarque y corregir la salida del primer autobús con el dato real. **No
+  replanificar.** Es barato, es lo que más se nota, y es honesto: la primera pierna es la que
+  el usuario está a punto de vivir.
+- **D2 · Sólo si D1 se queda corto:** invalidar y recalcular itinerarios cuyo primer autobús ya
+  pasó.
+
+### Cómo verificar que todo esto funciona
+
+**`OTPDifferentialTests`** — el mejor uso que le podemos dar al planificador del Concello.
+Igual que ya existe `BruteForceReference` como oráculo de optimalidad, montar un test
+diferencial que compare N pares origen-destino contra su `/plan` y falle cuando divergimos más
+de X minutos. **Ejecutado en tu máquina, no en la app.** Convierte "me sigue fallando" en un
+número que sube o baja con cada cambio.
+
+Nota de método: consultas puntuales y espaciadas, no un barrido masivo. Es infraestructura
+pública municipal, y no hay motivo para castigarla.
+
+### Lo que NO hay que hacer
+
+- **No portar OTP.** Es un servidor Java con un grafo de cientos de MB.
+- **No cambiar RAPTOR por A\*.** RAPTOR es mejor para lo nuestro: da el frente de Pareto
+  (llegada × transbordos) gratis, y está verificado contra fuerza bruta. El problema nunca fue
+  el algoritmo.
+- **No depender de su OTP en tiempo de ejecución como camino principal.** Perderíamos el
+  funcionamiento sin red, que es una ventaja real, y quedaríamos atados a infraestructura
+  ajena sin acuerdo. Como oráculo de pruebas, sí. Como motor de producción, no.
+
+### Orden recomendado
+
+```
+A0  preguntar por el feed largo         ·  hoy, coste cero, puede ahorrar la tanda A entera
+B1  factores de detour asimétricos      ·  hoy      · alivia el fallo más doloroso
+B2  footpaths reales precalculados      ·  1 semana · elimina la causa raíz en transbordos
+A1+A2+A3  ventana de calendario         ·  1-2 sem. · desbloquea una clase entera de consultas
+C1+C2  coste generalizado y rebarrido   ·  días     · la lista deja de ser heterogénea
+C3  silla de ruedas                     ·  días     · cierra nuestra única brecha de accesibilidad
+D1  tiempo real en la primera pierna    ·  días     · nos pone por delante de ellos
+B3  MKDirections en acceso/egreso       ·  después  · el último tramo de precisión
+B4  radio en minutos                    ·  con B3
+```
+
+Justificación del orden: **B1 es cambiar un número** y reduce hoy mismo los itinerarios
+imposibles de coger. **B2 no tiene coste en ejecución** y borra la causa raíz donde más duele.
+**A** es la que más trabajo cuesta, pero es la única que convierte "no tengo respuesta" en
+"tengo una respuesta etiquetada como estimada" — y eso, en una app de transporte, es la
+diferencia entre servir y no servir.
+
+---
+
+## 6. Registro de ejecución
+
+Estado de cada punto del plan. Se actualiza al cerrar cada uno.
+
+| Punto | Estado | Commit |
+|---|---|---|
+| A0 · Preguntar por el feed largo | **pendiente — acción humana** | — |
+| B1 · Factores de detour asimétricos | ✅ hecho | `b1` |
+| B2 · Footpaths reales precalculados | pendiente | |
+| A1 · Versionar el feed | pendiente | |
+| A2 · Proyección semanal etiquetada | pendiente | |
+| A3 · Calendario de festivos | pendiente | |
+| C1 · Coste generalizado en el corte | pendiente | |
+| C2 · Rebarrido de salidas | pendiente | |
+| C3 · Modo silla de ruedas | pendiente | |
+| D1 · Tiempo real en la primera pierna | pendiente | |
+| B3 · MKDirections en acceso/egreso | pendiente | |
+| B4 · Radio en minutos | pendiente | |
+| Tests diferenciales contra OTP | pendiente | |
+
+### A0 — Pendiente, y es tuyo
+
+No lo puedo hacer yo. Su OTP tiene 94 días de calendario **con festivos correctos** y el ZIP
+público tiene 7 días. Ese dato existe en algún sitio. Antes de invertir en A1–A3, pregunta:
+
+- A `datos.vigo.org` / el portal de datos abiertos: si publican un GTFS con calendario largo.
+- A Vitrasa: si el feed que entregan al Concello para el planificador es distinto del público.
+
+Si la respuesta es que sí, **A1–A3 se caen enteras** y se sustituyen por cambiar una URL.
+Merece la pena preguntar antes de construir el andamio.
+
+### B1 — Factores de detour asimétricos ✅
+
+**Qué cambió.** `PlannerOptions.walkDetourFactor` (un número, 1.35) se parte en dos:
+
+| | Antes | Ahora |
+|---|---|---|
+| Acceso / egreso / puerta a puerta | 1.35 | **1.50** |
+| Transbordo entre paradas | 1.35 | 1.35 |
+
+`WalkModel` gana un tipo `WalkKind { accessEgress, transfer }` y **todas** sus conversiones
+lo exigen: `seconds(metres:as:)`, `metres(forSeconds:as:)`, `seconds(from:to:as:)`. Sin valor
+por defecto, a propósito — pasar el tipo equivocado es un error silencioso de hasta un 11 % en
+una cifra que el usuario usa para decidir si le da tiempo a llegar, así que se paga en el
+compilador y no en la parada del autobús.
+
+**Por qué asimétrico.** Los dos errores no cuestan lo mismo:
+
+- Subestimar el acceso → le decimos que llega al autobús y no llega. Fallo ruidoso, el que
+  motivó todo esto.
+- Sobreestimar el acceso → descartamos una opción que el siguiente barrido de salidas o una
+  parada más cercana suelen recuperar. Fallo silencioso y barato.
+
+En transbordos la asimetría se invierte: un transbordo sobreestimado cruza
+`maxTransferWalkMetres` y **desaparece del grafo de footpaths**, y nada aguas abajo recupera
+un enlace que nunca se construyó. Por eso ahí se mantiene la media medida (1.33 ≈ 1.35).
+
+**Lo que esto NO arregla.** Sigue siendo una distribución con ±30 % de dispersión, sólo que
+ahora está centrada donde el error barato. La causa raíz —distancia en línea recta— la
+atacan B2 (transbordos) y B3 (acceso/egreso). Está anotado como *stopgap* en el propio código.
+
+**Verificación.** 387 tests en 45 suites, verde. Dos nuevos:
+- `accessIsThePessimisticEnd` — un acceso nunca sale más barato que el mismo tramo como
+  transbordo, para toda distancia de 25 a 800 m.
+- `roundTrip` — `metres → seconds → metres` cierra dentro del error de redondeo para los dos
+  tipos, y se comprueba que cruzarlos sí produce la discrepancia que el parámetro evita.
+
+---
+
+## Anexo — Reproducir los sondeos
+
+```bash
+# Identidad y ventana del grafo del Concello
+curl -s "https://planificador-rutas.vigo.org/otp/routers/default" | python3 -m json.tool
+
+# Feeds y rutas cargadas
+curl -s "https://planificador-rutas.vigo.org/otp/routers/default/index/feeds"
+curl -s "https://planificador-rutas.vigo.org/otp/routers/default/index/routes"
+
+# Un plan (fechas en MM-DD-YYYY, hora en 'h:mm AM')
+curl -s -G "https://planificador-rutas.vigo.org/otp/routers/default/plan" \
+  --data-urlencode "fromPlace=42.2358735,-8.7200833" \
+  --data-urlencode "toPlace=42.1910340,-8.7143031" \
+  --data-urlencode "date=09-08-2026" --data-urlencode "time=9:00 AM" \
+  --data-urlencode "mode=TRANSIT,WALK" --data-urlencode "numItineraries=3"
+
+# Caminata real sobre el grafo OSM (para calibrar WalkModel)
+curl -s -G "https://planificador-rutas.vigo.org/otp/routers/default/plan" \
+  --data-urlencode "fromPlace=LAT,LON" --data-urlencode "toPlace=LAT,LON" \
+  --data-urlencode "mode=WALK" --data-urlencode "date=09-08-2026" \
+  --data-urlencode "time=9:00 AM" --data-urlencode "numItineraries=1"
+```

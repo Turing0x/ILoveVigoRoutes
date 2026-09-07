@@ -15,12 +15,38 @@ public struct PlannerOptions: Sendable, Hashable {
     /// app propose journeys that cannot be caught, which is worse than proposing none.
     public var walkSpeedMetresPerSecond: Double
 
-    /// Straight-line distance is multiplied by this before it becomes time.
+    /// Straight-line distance from the origin to a stop — or from a stop to the destination
+    /// — is multiplied by this before it becomes time.
     ///
-    /// There is no street graph in this app — no MKDirections, no OSM routing — so this
-    /// factor is what stands in for corners, crossings and Vigo's hills. It is the reason
-    /// every walking figure in the UI is labelled an estimate.
-    public var walkDetourFactor: Double
+    /// There is no street graph in this app — no MKDirections, no OSM routing — so this and
+    /// `transferDetourFactor` are what stand in for corners, crossings and Vigo's hills.
+    /// They are the reason every walking figure in the UI is labelled an estimate.
+    ///
+    /// **Two numbers and not one, because the two errors do not cost the same.** Measured
+    /// against a real pedestrian street graph over fourteen stop pairs of 150–800 m in Vigo
+    /// (`AUDITORIA-MOTOR-VS-CONCELLO.md` §3, F-2), the ratio of street distance to
+    /// straight-line distance came out at p50 1.23, p90 1.66, max 1.86, mean 1.33. A single
+    /// factor of 1.35 is an excellent estimate of that *mean* and a poor one of any
+    /// individual pair: the per-pair error ran from −28 % to +29 %.
+    ///
+    /// Underestimating an access walk hands the user a bus they cannot catch — the loudest
+    /// failure this planner has, and the one that made this split worth doing. Overestimating
+    /// one only drops an option that a later departure scan or a nearer stop usually
+    /// recovers. So this figure is deliberately pessimistic, between the measured p50 and
+    /// p90, while `transferDetourFactor` keeps the mean.
+    ///
+    /// A stopgap by construction: it narrows a distribution rather than replacing it. The
+    /// real fix is a distance that is not straight-line at all — `MKDirections` for this end
+    /// of the journey, precomputed street footpaths for the other.
+    public var accessDetourFactor: Double
+
+    /// The same, for a walk between two stops inside the network.
+    ///
+    /// Keeps the measured mean rather than the pessimistic figure `accessDetourFactor` uses.
+    /// The asymmetry is deliberate: an overestimated transfer is not merely deprioritised,
+    /// it drops out of the footpath graph entirely once it crosses `maxTransferWalkMetres`,
+    /// and nothing downstream can recover a connection that was never built.
+    public var transferDetourFactor: Double
 
     /// How far from the origin (or from the destination) a stop may be and still count as
     /// a way in or out of the network. 800 m is the figure the handoff fixes.
@@ -117,7 +143,8 @@ public struct PlannerOptions: Sendable, Hashable {
 
     public init(
         walkSpeedMetresPerSecond: Double = 1.33,
-        walkDetourFactor: Double = 1.35,
+        accessDetourFactor: Double = 1.50,
+        transferDetourFactor: Double = 1.35,
         accessRadiusMetres: Double = 800,
         maxTransferWalkMetres: Double = 300,
         minTransferSeconds: Int = 60,
@@ -132,7 +159,8 @@ public struct PlannerOptions: Sendable, Hashable {
         maxNearbyStops: Int = 100
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
-        self.walkDetourFactor = walkDetourFactor
+        self.accessDetourFactor = accessDetourFactor
+        self.transferDetourFactor = transferDetourFactor
         self.accessRadiusMetres = accessRadiusMetres
         self.maxTransferWalkMetres = maxTransferWalkMetres
         self.minTransferSeconds = minTransferSeconds

@@ -304,12 +304,14 @@ public enum JourneyReconstruction {
                     pattern: firstBoard.pattern, trip: firstBoard.trip, position: firstBoard.boardPosition)
                 accessDeparture = firstBoardTime &- seconds
                 legs.append(.walk(from: origin, to: .stop(timetable.stops[step.stop]),
-                                  seconds: Int(seconds), metres: walk.metres(forSeconds: Int(seconds))))
+                                  seconds: Int(seconds),
+                                  metres: walk.metres(forSeconds: Int(seconds), as: .accessEgress)))
             case .walk(_, let seconds):
                 let source = chain[index - 1].stop
                 legs.append(.walk(from: .stop(timetable.stops[source]),
                                   to: .stop(timetable.stops[step.stop]),
-                                  seconds: Int(seconds), metres: walk.metres(forSeconds: Int(seconds))))
+                                  seconds: Int(seconds),
+                                  metres: walk.metres(forSeconds: Int(seconds), as: .transfer)))
             case .ride:
                 let ride = rides[rideIndex]
                 rideIndex += 1
@@ -333,7 +335,8 @@ public enum JourneyReconstruction {
             }
         }
         legs.append(.walk(from: .stop(timetable.stops[egressStop]), to: destination,
-                          seconds: Int(egressSeconds), metres: walk.metres(forSeconds: Int(egressSeconds))))
+                          seconds: Int(egressSeconds),
+                          metres: walk.metres(forSeconds: Int(egressSeconds), as: .accessEgress)))
 
         let lastRide = rides[rides.count - 1]
         var networkArrival = timetable.arrival(pattern: lastRide.pattern, trip: lastRide.trip,

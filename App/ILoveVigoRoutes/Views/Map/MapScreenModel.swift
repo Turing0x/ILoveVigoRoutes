@@ -81,8 +81,15 @@ final class MapScreenModel {
 
     // MARK: - Paradas
 
-    func loadStops() {
-        allStops = (try? repository.allStops()) ?? []
+    /// Off the main actor, like `MapSearchSheet`'s three queries against this same pool
+    /// (H-53). All 1149 stops decoded synchronously on the main actor was the first frame of
+    /// the map waiting on SQLite for no reason: `TransitRepository` is a `Sendable` struct over
+    /// a `DatabasePool`, so the read parks a cooperative-pool thread instead.
+    func loadStops() async {
+        let repository = repository
+        allStops = await Task.detached(priority: .userInitiated) {
+            (try? repository.allStops()) ?? []
+        }.value
         recomputeLayer()
     }
 

@@ -370,7 +370,7 @@ struct TimetableBuilderTests {
             (Int(timetable.footpathTarget[$0]), Int(timetable.footpathSeconds[$0]))
         }
         #expect(fromC.map(\.0) == [twin], "only the stop across the road is within 300 m")
-        #expect(fromC[0].1 == WalkModel().seconds(metres: 40))
+        #expect(fromC[0].1 == WalkModel().seconds(metres: 40, as: .transfer))
         #expect(timetable.footpaths(fromStop: b).isEmpty, "B's neighbours are 600 m away")
     }
 

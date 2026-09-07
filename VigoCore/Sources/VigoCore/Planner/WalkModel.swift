@@ -41,6 +41,20 @@ public struct Footpath: Sendable, Hashable {
     }
 }
 
+/// Which of a journey's walks a figure belongs to.
+///
+/// Not a cosmetic label: it selects the detour factor, and the two differ on purpose — see
+/// `PlannerOptions.accessDetourFactor` for the measurement and the argument. Passing the
+/// wrong one is a silent error of up to 11 % in a number the user acts on, so the parameter
+/// has no default anywhere it is reachable from the planner.
+public enum WalkKind: Sendable, Hashable, CaseIterable {
+    /// Origin → first stop, last stop → destination, or a door-to-door walk with no bus at
+    /// all. One end of it is a place the passenger chose, not a stop.
+    case accessEgress
+    /// Stop → stop, inside the network: a transfer on foot.
+    case transfer
+}
+
 /// Turns distance into walking time, and finds the stop-to-stop walks the planner is
 /// allowed to use as transfers.
 ///
@@ -56,11 +70,21 @@ public struct WalkModel: Sendable {
         self.options = options
     }
 
+    /// The multiplier that turns straight-line metres into walked metres, for one kind of
+    /// walk. The single place the two options are told apart, so a future third kind is one
+    /// case here and a compiler error at every call site rather than a silent default.
+    public func detourFactor(_ kind: WalkKind) -> Double {
+        switch kind {
+        case .accessEgress: options.accessDetourFactor
+        case .transfer:     options.transferDetourFactor
+        }
+    }
+
     /// Rounded **up**, so the planner never claims a walk is faster than it is and then
     /// hands the user a bus they cannot catch.
-    public func seconds(metres: Double) -> Int {
+    public func seconds(metres: Double, as kind: WalkKind) -> Int {
         guard metres > 0 else { return 0 }
-        let walked = metres * options.walkDetourFactor
+        let walked = metres * detourFactor(kind)
         return Int((walked / options.walkSpeedMetresPerSecond).rounded(.up))
     }
 
@@ -69,16 +93,20 @@ public struct WalkModel: Sendable {
             from.latitude, from.longitude, to.latitude, to.longitude)
     }
 
-    /// Undoes `seconds(metres:)`, for a walk leg that only has the seconds `Timetable`
+    /// Undoes `seconds(metres:as:)`, for a walk leg that only has the seconds `Timetable`
     /// stored — the exact metres were never carried past `footpaths(stops:)`. Approximate
-    /// by construction: `seconds(metres:)` rounds up, so this is a lower bound on the
+    /// by construction: `seconds(metres:as:)` rounds up, so this is a lower bound on the
     /// distance that produced it, close enough for a UI figure already labelled an estimate.
-    public func metres(forSeconds seconds: Int) -> Double {
-        Double(seconds) * options.walkSpeedMetresPerSecond / options.walkDetourFactor
+    ///
+    /// `kind` **must** be the one the seconds were produced with. Reversing an access walk
+    /// with the transfer factor overstates its distance by the ratio between them, and that
+    /// number is shown to the user as metres on a map.
+    public func metres(forSeconds seconds: Int, as kind: WalkKind) -> Double {
+        Double(seconds) * options.walkSpeedMetresPerSecond / detourFactor(kind)
     }
 
-    public func seconds(from: Coordinate, to: Coordinate) -> Int {
-        seconds(metres: metres(from: from, to: to))
+    public func seconds(from: Coordinate, to: Coordinate, as kind: WalkKind) -> Int {
+        seconds(metres: metres(from: from, to: to), as: kind)
     }
 
     /// The symmetric transfer walks between stops closer than `maxTransferWalkMetres`,
@@ -115,7 +143,9 @@ public struct WalkModel: Sendable {
                     origin.latitude, origin.longitude, other.latitude, other.longitude)
                 guard metres <= radius else { continue }
 
-                let cost = Int32(seconds(metres: metres))
+                // `.transfer` is not a choice here: this function's whole output is the
+                // footpath graph, and every edge in it is a stop-to-stop transfer.
+                let cost = Int32(seconds(metres: metres, as: .transfer))
                 paths.append(Footpath(from: Int32(index), to: Int32(otherIndex),
                                       seconds: cost, metres: metres))
                 paths.append(Footpath(from: Int32(otherIndex), to: Int32(index),

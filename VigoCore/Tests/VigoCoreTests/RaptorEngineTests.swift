@@ -116,7 +116,7 @@ struct RaptorEngineTests {
         let result = RaptorEngine().run(
             network.timetable, network.query(from: network.a, to: network.d, at: T.at(7, 0)))
 
-        let expected = WalkModel().seconds(metres: 40)
+        let expected = WalkModel().seconds(metres: 40, as: .transfer)
         #expect(result.arrival(round: 1, stop: network.twin)
                 == T.at(8, 20) + Int32(expected))
         #expect(result.parent(round: 1, stop: network.twin)

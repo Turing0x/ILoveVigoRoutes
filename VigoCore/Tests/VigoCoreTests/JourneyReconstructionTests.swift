@@ -131,7 +131,7 @@ struct JourneyReconstructionTests {
         #expect(fromStop.id == StopID("1003"))
         #expect(toStop.id == StopID("1004"), "walks to C's twin")
         #expect(secondBoard.id == StopID("1004"))
-        #expect(seconds == WalkModel(options: options).seconds(metres: 40))
+        #expect(seconds == WalkModel(options: options).seconds(metres: 40, as: .transfer))
         #expect(abs(metres - 40) < 1, "recovered from seconds, so only approximate")
         #expect(network.timetable.axisSeconds(for: journey.arrival) == Int(T.at(8, 40)))
     }

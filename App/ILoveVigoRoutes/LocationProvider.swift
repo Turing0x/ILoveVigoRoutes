@@ -52,11 +52,20 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
+    /// Called after `authorization` changes, so whoever owns the lease can re-apply it.
+    ///
+    /// This used to be `if isAuthorized { start() }` right here, which was CoreLocation
+    /// deciding that the manager should be running (H-50). Whether it should, and at what
+    /// precision, is `LocationDemand`'s answer — `SharedLocation` re-applies the current demand
+    /// instead, so permission granted mid-session starts at the precision whichever screen is
+    /// actually up asked for, rather than at this class's default.
+    var onAuthorizationChange: (@MainActor () -> Void)?
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
             self.authorization = status
-            if self.isAuthorized { self.start() }
+            self.onAuthorizationChange?()
         }
     }
 

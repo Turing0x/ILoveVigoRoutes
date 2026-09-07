@@ -19,6 +19,16 @@ final class AppEnvironment {
     /// One long-lived MapKit completer keeps address suggestions warm without learning or
     /// sending the user's location: it always searches the fixed Vigo region.
     let addressSearch: any AddressSearching
+    /// One `CLLocationManager` for the whole app, leased by whichever screens are up (H-50).
+    /// `MapScreen` and `MapSearchSheet` each used to own one, so two ran at once whenever the
+    /// search sheet was over the map — and the sheet rebuilt its own on every re-evaluation of
+    /// `MapScreen`'s body, a synchronous XPC round trip to `locationd` on the main actor per
+    /// update tick, during the very transition that was stuttering.
+    let location = SharedLocation()
+    /// Reverse geocoding, once and for the same reason: `MapSearchSheet` took a
+    /// `MapKitPlaceResolver()` as a *default argument*, which is a fresh `CLGeocoder` on every
+    /// initialiser call.
+    let placeResolver: any MapPlaceResolving = MapKitPlaceResolver()
     private let timetableStore: TimetableStore
     private let throttledRealtime: ThrottledRealtimeProvider
 
