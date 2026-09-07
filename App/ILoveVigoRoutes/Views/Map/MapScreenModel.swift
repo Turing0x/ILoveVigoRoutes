@@ -60,6 +60,23 @@ final class MapScreenModel {
 
     static let orderingKey = "route.ordering"
 
+    /// How the traveller gets about on foot (C3).
+    ///
+    /// Unlike `ordering`, this cannot be applied to the answer already on screen: it changes
+    /// which journeys exist, because 62 of the measured transfers have no wheelchair route
+    /// at all. So it clears the route and re-plans, and `setAccessibility` on the state is
+    /// what makes that impossible to forget.
+    var accessibility: AccessibilityProfile {
+        get { state.accessibility }
+        set {
+            guard state.setAccessibility(newValue) else { return }
+            defaults.set(newValue.rawValue, forKey: Self.accessibilityKey)
+            Task { await plan() }
+        }
+    }
+
+    static let accessibilityKey = "route.accessibility"
+
     private var viewport: MapStopsLayer.Viewport?
 
     init(repository: TransitRepository,
@@ -76,6 +93,10 @@ final class MapScreenModel {
         if let stored = defaults.string(forKey: Self.orderingKey),
            let restored = JourneyOrdering(rawValue: stored) {
             state.setOrdering(restored)
+        }
+        if let stored = defaults.string(forKey: Self.accessibilityKey),
+           let restored = AccessibilityProfile(rawValue: stored) {
+            state.setAccessibility(restored)
         }
     }
 

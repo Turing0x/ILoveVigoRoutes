@@ -515,7 +515,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | A3 · Calendario de festivos | ✅ hecho | `a3` |
 | C1 · Coste generalizado en el corte | ✅ hecho | `c1` |
 | C2 · Rebarrido de salidas | ❌ **retirado — medido, no hacía falta** | — |
-| C3 · Modo silla de ruedas | pendiente | |
+| C3 · Modo silla de ruedas | ✅ hecho | `c3` |
 | D1 · Tiempo real en la primera pierna | pendiente | |
 | B3 · MKDirections en acceso/egreso | pendiente | |
 | B4 · Radio en minutos | pendiente | |
@@ -827,6 +827,76 @@ los pases del rebarrido son productivos, la dominancia sola apenas filtra, la po
 quitarle a ningún criterio su respuesta, y conserva más de una salida. Esos cuatro tests son lo
 que atrapó los dos borradores fallidos; un fixture sintético no te dice que un filtro se está
 comiendo los cuatro autobuses siguientes.
+
+### C3 — Modo silla de ruedas ✅
+
+**Primero, lo que descubrí y cambió el plan.** El plan decía «`wheelchair_boarding` ya está en
+`stops.txt` y ya lo importamos: filtrar paradas no accesibles». Lo comprobé:
+
+```
+stops.txt   wheelchair_boarding=1  →  1154 de 1154
+trips.txt   wheelchair_accessible=1 →  3801 de 3801
+```
+
+**El feed declara accesible el 100 % de todo.** Filtrar por esos campos sería un no-op que
+*parecería* un modo silla de ruedas. Eso es lo peor que se puede hacer aquí: quien depende de
+esa información es quien menos margen tiene para absorber una respuesta equivocada. Así que no
+se filtra por ahí, y el código lo dice.
+
+**Lo que sí se puede afirmar con datos: la acera.** Mi extracto de OSM para B2 incluía
+`highway=steps`. Una escalera es un enlace peatonal perfectamente válido y un muro para alguien
+en silla, y esa diferencia hay que hacerla **en el grafo**, no en las distancias — porque la
+alternativa es otra ruta, no una versión más larga de la misma.
+
+`Tools/build_footpaths.py --exclude-ways` genera una segunda tabla sobre un grafo del que se
+han quitado 790 vías: escaleras, vías con `wheelchair=no` y pendientes fuertes
+(`Tools/overpass_barriers.ql` dice exactamente qué). Resultado:
+
+| | A pie | En silla |
+|---|---:|---:|
+| Transbordos medidos | 3.220 | 3.159 |
+| **Desaparecen** (no hay ruta sin escaleras) | — | **62** |
+| Se alargan | — | 54 |
+
+Los rodeos más grandes:
+
+| A pie | En silla | Paradas |
+|---:|---:|---|
+| **84 m** | **336 m** | Avda. de Vigo 161 ↔ 230 |
+| 153 m | 387 m | Estrada de Bembrive 278 ↔ Rúa da Cruz 2 |
+| 118 m | 351 m | Estrada de Bembrive 278 ↔ 269 |
+
+Un transbordo de 84 metros que en realidad son 336. Eso no es un ajuste fino.
+
+**Cómo viaja el perfil.** En `PlanQuery`, no en la configuración de la app: alguien puede
+planificar un viaje para sí y el siguiente para un familiar, y un ajuste global convertiría eso
+en un viaje a la pantalla de ajustes y vuelta. También es lo que permite que un solo
+`JourneyPlanner` y un solo `TimetableStore` sirvan a los dos perfiles — con el perfil dentro de
+la clave de caché, porque un horario construido para uno es falso para el otro.
+
+**Velocidad.** 1,0 m/s en silla frente a 1,33 a pie. Es política, no una medición: yerra por lo
+prudente igual que la cifra a pie, y el margen importa más aquí porque el coste de perder el
+autobús es mayor. Está separada y con nombre propio para poder revisarla sin tocar la otra.
+
+**En la interfaz**, un interruptor —«Ruta sin escaleras»— y no un menú: son dos estados, y un
+menú escondería cuál está activo. Cambiarlo **vacía la respuesta y vuelve a buscar**, no la
+reordena: dejar en pantalla trayectos calculados a pie bajo una etiqueta de silla de ruedas
+sería la peor mentira que esta app puede contar. `setAccessibility` lo hace imposible de
+olvidar.
+
+Y la nota al pie promete sólo lo que los datos sostienen:
+
+> Los tramos a pie rodean escaleras, tramos marcados como no accesibles y cuestas fuertes. No
+> podemos confirmar la accesibilidad de cada parada ni de cada autobús: el Concello los declara
+> todos accesibles y no publica el detalle.
+
+**Un artefacto conocido.** 13 pares salen hasta 8 m *más cortos* en silla. No es un error de
+enrutado: el grafo en silla es un subgrafo, su componente conexa mayor es menor, y unas pocas
+paradas enganchan a otro nodo con distinto residuo. Sobre caminatas de cientos de metros es
+ruido del método de enganche, está documentado en el generador y el test lo contempla con
+tolerancia explícita en vez de fingir que no ocurre.
+
+**Verificación.** 449 tests en 52 suites, verde. Ocho nuevos. La app compila.
 
 ### B1 — Factores de detour asimétricos ✅
 

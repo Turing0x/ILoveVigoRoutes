@@ -85,7 +85,7 @@ public struct WalkModel: Sendable {
     public func seconds(metres: Double, as kind: WalkKind) -> Int {
         guard metres > 0 else { return 0 }
         let walked = metres * detourFactor(kind)
-        return Int((walked / options.walkSpeedMetresPerSecond).rounded(.up))
+        return Int((walked / options.effectiveWalkSpeed).rounded(.up))
     }
 
     public func metres(from: Coordinate, to: Coordinate) -> Double {
@@ -102,7 +102,7 @@ public struct WalkModel: Sendable {
     /// with the transfer factor overstates its distance by the ratio between them, and that
     /// number is shown to the user as metres on a map.
     public func metres(forSeconds seconds: Int, as kind: WalkKind) -> Double {
-        Double(seconds) * options.walkSpeedMetresPerSecond / detourFactor(kind)
+        Double(seconds) * options.effectiveWalkSpeed / detourFactor(kind)
     }
 
     public func seconds(from: Coordinate, to: Coordinate, as kind: WalkKind) -> Int {
@@ -197,6 +197,6 @@ public struct WalkModel: Sendable {
     /// double-count it, which is the one mistake this whole split makes easy to write.
     public func secondsForWalkedMetres(_ metres: Double) -> Int {
         guard metres > 0 else { return 0 }
-        return Int((metres / options.walkSpeedMetresPerSecond).rounded(.up))
+        return Int((metres / options.effectiveWalkSpeed).rounded(.up))
     }
 }

@@ -18,6 +18,7 @@ struct MapRouteSheet: View {
     let onSwap: () -> Void
     let onDeparture: (MapNavigationState.Departure) -> Void
     let onOrdering: (JourneyOrdering) -> Void
+    let onAccessibility: (AccessibilityProfile) -> Void
     let onRefresh: () async -> Void
     let onSelect: (Int) -> Void
     let onOpen: () -> Void
@@ -56,6 +57,7 @@ struct MapRouteSheet: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         departurePicker
+                        accessibilityToggle
                         if state.origin == nil {
                             // The origin is normally filled in by the device. When it is not,
                             // saying so beats an empty row the user has to guess about.
@@ -259,6 +261,35 @@ struct MapRouteSheet: View {
                         Text(age)
                     }
                 }
+            }
+        }
+    }
+
+    /// The mobility profile (C3).
+    ///
+    /// A toggle and not a menu: there are two states, and a menu would hide which one is
+    /// active behind a tap. It sits with the departure controls rather than beside the
+    /// ordering menu on purpose — ordering is about how the answers are shown, this is about
+    /// what is searched for, and putting them side by side would suggest they are the same
+    /// kind of choice.
+    ///
+    /// The footnote is the honest part. It promises what the data supports — a walking route
+    /// that avoids steps — and not what it does not: the feed declares every stop and every
+    /// vehicle accessible, so this app has no basis to claim anything about kerbs or ramps.
+    private var accessibilityToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { state.accessibility == .wheelchair },
+                set: { onAccessibility($0 ? .wheelchair : .standard) })
+            ) {
+                Label("Ruta sin escaleras", systemImage: "figure.roll")
+            }
+            .accessibilityHint("Evita escaleras y cuestas fuertes al calcular los tramos a pie")
+
+            if state.accessibility == .wheelchair {
+                Text("Los tramos a pie rodean escaleras, tramos marcados como no accesibles y cuestas fuertes. No podemos confirmar la accesibilidad de cada parada ni de cada autobús: el Concello los declara todos accesibles y no publica el detalle.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }

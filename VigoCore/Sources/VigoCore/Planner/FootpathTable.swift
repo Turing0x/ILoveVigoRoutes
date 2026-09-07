@@ -137,11 +137,49 @@ public struct FootpathTable: Sendable {
     /// straight-line estimate it used before — worse answers, not no answers — and that is
     /// the right trade for a resource whose absence is a packaging mistake rather than a
     /// user's problem.
-    public static let bundled: FootpathTable = {
-        guard let url = Bundle.module.url(forResource: "footpaths", withExtension: "csv"),
+    public static let bundled: FootpathTable = bundled(for: .standard)
+
+    private static let standardTable = load(resource: "footpaths")
+    private static let wheelchairTable = load(resource: "footpaths-wheelchair")
+
+    /// The measured table for one mobility profile.
+    ///
+    /// Two tables and not one table with a modifier, because the difference is not in the
+    /// distances: it is in which pairs are connected at all. A flight of steps is a perfectly
+    /// good pedestrian link and a wall to somebody in a wheelchair, so the wheelchair table
+    /// is routed over a graph those ways have been removed from. Of 3220 measured transfers,
+    /// 62 have no wheelchair route at all and 54 get longer — one of them by 252 m.
+    public static func bundled(for profile: AccessibilityProfile) -> FootpathTable {
+        switch profile {
+        case .standard:   standardTable
+        case .wheelchair: wheelchairTable
+        }
+    }
+
+    private static func load(resource: String) -> FootpathTable {
+        guard let url = Bundle.module.url(forResource: resource, withExtension: "csv"),
               let data = try? Data(contentsOf: url),
               let table = try? load(csv: data)
         else { return .empty }
         return table
-    }()
+    }
+}
+
+/// How the traveller gets about on foot, which decides which pavements exist for them.
+///
+/// Named for what it changes rather than for the traveller: the planner does not need to
+/// know anything about a person, only which of two measured street networks to route their
+/// walking over.
+public enum AccessibilityProfile: String, Sendable, Hashable, CaseIterable, Codable {
+    case standard
+    /// Routes around steps, ways tagged `wheelchair=no`, and steep inclines. See
+    /// `Tools/overpass_barriers.ql` for exactly what is excluded.
+    case wheelchair
+
+    public var label: String {
+        switch self {
+        case .standard:   "A pie"
+        case .wheelchair: "Silla de ruedas"
+        }
+    }
 }

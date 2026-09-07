@@ -323,6 +323,7 @@ struct MapScreen: View {
                 onSwap: { Task { await model.swapEnds() } },
                 onDeparture: { departure in Task { await model.setDeparture(departure) } },
                 onOrdering: { model.ordering = $0 },
+                onAccessibility: { model.accessibility = $0 },
                 onRefresh: { await model.refresh() },
                 onSelect: { model.selectAlternative(at: $0) },
                 onOpen: { model.openSelectedAlternative() },

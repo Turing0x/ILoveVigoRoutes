@@ -92,6 +92,16 @@ public struct MapNavigationState: Sendable {
     /// never re-plans. A tap on the menu that cost four RAPTOR passes and up to sixteen
     /// `shapePoint` reads would be a very expensive way to sort a list of four.
     public private(set) var ordering: JourneyOrdering = .default
+
+    /// How the traveller gets about on foot (C3).
+    ///
+    /// **Not the same kind of setting as `ordering`.** Changing the ordering reorders
+    /// journeys already computed; changing this one changes which journeys exist, because
+    /// 62 of the measured transfers have no wheelchair route at all. So it invalidates the
+    /// current answer rather than resorting it, and `setAccessibility` says so by clearing
+    /// the route — leaving stale walking journeys on screen under a wheelchair label would
+    /// be the worst lie this app could tell.
+    public private(set) var accessibility: AccessibilityProfile = .standard
     public var departure: Departure = .now
 
     /// True while the origin is still whatever the device last reported.
@@ -247,7 +257,8 @@ public struct MapNavigationState: Sendable {
     public func routeQuery(now: Date) -> PlanQuery? {
         guard let origin, let destination else { return nil }
         return PlanQuery(origin: origin.place, destination: destination.place,
-                         departure: departure.date(now: now))
+                         departure: departure.date(now: now),
+                         accessibility: accessibility)
     }
 
     // MARK: - Planning
@@ -258,7 +269,6 @@ public struct MapNavigationState: Sendable {
         isFollowing = false
     }
 
-    /// Folds a `PlanOutcome` into the three shapes the UI draws.
     /// How the schedule behind the current answer was arrived at (A2).
     ///
     /// Held on the state rather than derived at render time because the view that shows it
@@ -282,6 +292,7 @@ public struct MapNavigationState: Sendable {
         return PlanOutcomeMessage.estimateNotice(schedule)
     }
 
+    /// Folds a `PlanOutcome` into the three shapes the UI draws.
     public mutating func planningFinished(_ outcome: PlanOutcome,
                                           schedule: ServiceDaySource = .observed) {
         self.schedule = schedule
@@ -338,6 +349,21 @@ public struct MapNavigationState: Sendable {
     /// it point at a different journey: the map would highlight one route while the list
     /// highlighted another. Back to the top, and following off — the same argument already
     /// written into `selectAlternative(at:)`.
+    /// Switches profile and drops the current answer, which was computed for the other one.
+    ///
+    /// Returns whether the caller needs to plan again. `false` when nothing changed, so a
+    /// repeated tap on the current profile does not cost a search.
+    @discardableResult
+    public mutating func setAccessibility(_ profile: AccessibilityProfile) -> Bool {
+        guard profile != accessibility else { return false }
+        accessibility = profile
+        route = .idle
+        selectedAlternative = 0
+        isFollowing = false
+        schedule = .observed
+        return true
+    }
+
     public mutating func setOrdering(_ ordering: JourneyOrdering) {
         guard ordering != self.ordering else { return }
         self.ordering = ordering

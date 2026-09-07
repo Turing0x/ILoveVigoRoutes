@@ -15,6 +15,40 @@ public struct PlannerOptions: Sendable, Hashable {
     /// app propose journeys that cannot be caught, which is worse than proposing none.
     public var walkSpeedMetresPerSecond: Double
 
+    /// How the traveller gets about on foot (C3).
+    ///
+    /// Selects which measured street network the walking is routed over, and which of the
+    /// two speeds applies. **Not cosmetic**: 62 of the 3220 measured transfers have no
+    /// wheelchair route at all, because the only pedestrian link between those two stops is
+    /// a flight of steps.
+    ///
+    /// What this deliberately does **not** do is filter stops by the GTFS
+    /// `wheelchair_boarding` field. Every one of the feed's 1154 stops declares itself
+    /// accessible, and so does every one of its 3801 trips. A filter on those columns would
+    /// be a no-op that nonetheless *looked* like a wheelchair mode — the worst possible
+    /// outcome, because the person relying on it has the least room to absorb a wrong
+    /// answer. `Stop.wheelchairBoarding` is imported and available for the day the operator
+    /// starts distinguishing; until then the honest claim this app can make is about the
+    /// pavement, not about the kerb or the ramp, and that is the claim the UI makes.
+    public var accessibility: AccessibilityProfile
+
+    /// Metres per second for a wheelchair user, used in place of `walkSpeedMetresPerSecond`
+    /// when `accessibility` is `.wheelchair`.
+    ///
+    /// 1.0 m/s. Errs slow for the same reason the walking figure does — an optimistic
+    /// estimate offers a bus that cannot be caught — and the margin matters more here, since
+    /// the cost of missing it is higher. A number to revise from real use, not a measured
+    /// one; it is separate and named so it can be revised without touching the walking one.
+    public var wheelchairSpeedMetresPerSecond: Double
+
+    /// The speed that actually applies, given the profile.
+    public var effectiveWalkSpeed: Double {
+        switch accessibility {
+        case .standard:   walkSpeedMetresPerSecond
+        case .wheelchair: wheelchairSpeedMetresPerSecond
+        }
+    }
+
     /// Straight-line distance from the origin to a stop — or from a stop to the destination
     /// — is multiplied by this before it becomes time.
     ///
@@ -174,6 +208,8 @@ public struct PlannerOptions: Sendable, Hashable {
 
     public init(
         walkSpeedMetresPerSecond: Double = 1.33,
+        accessibility: AccessibilityProfile = .standard,
+        wheelchairSpeedMetresPerSecond: Double = 1.0,
         accessDetourFactor: Double = 1.50,
         transferDetourFactor: Double = 1.35,
         accessRadiusMetres: Double = 800,
@@ -192,6 +228,8 @@ public struct PlannerOptions: Sendable, Hashable {
         alternativeSlackSeconds: TimeInterval = 900
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
+        self.accessibility = accessibility
+        self.wheelchairSpeedMetresPerSecond = wheelchairSpeedMetresPerSecond
         self.accessDetourFactor = accessDetourFactor
         self.transferDetourFactor = transferDetourFactor
         self.accessRadiusMetres = accessRadiusMetres

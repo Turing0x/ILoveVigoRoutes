@@ -77,18 +77,31 @@ class Grid:
                 yield from self.buckets.get((r0 + dr, c0 + dc), ())
 
 
-def load_osm_graph(path):
-    """Node coordinates and an adjacency list, from an Overpass `out skel` dump."""
+def load_osm_graph(path, excluded_way_ids=frozenset()):
+    """Node coordinates and an adjacency list, from an Overpass `out skel` dump.
+
+    `excluded_way_ids` drops whole ways from the graph before it is built. That is how
+    the wheelchair profile is produced: a flight of steps is a perfectly good pedestrian
+    connection and a wall to somebody in a wheelchair, and the difference has to be made
+    in the graph rather than in the distances, because the alternative route is a
+    different route and not a longer version of the same one.
+    """
     with open(path, encoding="utf-8") as handle:
         raw = json.load(handle)
 
     coords = {}
     ways = []
+    skipped = 0
     for element in raw["elements"]:
         if element["type"] == "node":
             coords[element["id"]] = (element["lat"], element["lon"])
         elif element["type"] == "way":
+            if element["id"] in excluded_way_ids:
+                skipped += 1
+                continue
             ways.append(element["nodes"])
+    if excluded_way_ids:
+        print(f"ways excluded         {skipped}", file=sys.stderr)
 
     adjacency = defaultdict(list)
     edges = 0
@@ -142,6 +155,14 @@ def snap_stops(stops, coords, component, max_snap_metres):
     metres on a dense urban network and saves splitting every way. The residual is
     added back at both ends of every route, so it is accounted for rather than
     ignored.
+
+    One consequence worth knowing about when comparing the two profiles: the
+    wheelchair graph is a subgraph, so its largest component is slightly smaller and
+    a few stops snap to a different node than they do on foot. Their residuals then
+    differ, which is why a handful of pairs come out marginally *shorter* in a
+    wheelchair than on foot. On the current tables that is 13 pairs by at most 8 m,
+    against walks of a few hundred metres. It is noise from the snapping method, not
+    a routing error, and `AccessibilityProfileTests` allows for it explicitly.
     """
     grid = Grid(200)
     for node_id in component:
@@ -209,6 +230,10 @@ def main():
                         help="straight-line radius searched for candidate pairs (default 600)")
     parser.add_argument("--max-snap-metres", type=float, default=120.0,
                         help="a stop further than this from any path is left out (default 120)")
+    parser.add_argument("--exclude-ways",
+                        help="file of OSM way ids, one per line, to drop from the graph. "
+                             "Used for the wheelchair profile: steps, wheelchair=no, and "
+                             "steep inclines. See Tools/overpass_barriers.ql")
     args = parser.parse_args()
 
     started = time.time()
@@ -218,7 +243,13 @@ def main():
                  for r in csv.DictReader(handle)]
     print(f"stops                 {len(stops)}", file=sys.stderr)
 
-    coords, adjacency, edge_count = load_osm_graph(args.osm)
+    excluded = frozenset()
+    if args.exclude_ways:
+        with open(args.exclude_ways, encoding="utf-8") as handle:
+            excluded = frozenset(int(line) for line in handle if line.strip())
+        print(f"exclusion list        {len(excluded)} ways", file=sys.stderr)
+
+    coords, adjacency, edge_count = load_osm_graph(args.osm, excluded)
     print(f"osm nodes/edges       {len(coords)} / {edge_count}", file=sys.stderr)
 
     component = largest_component(adjacency)

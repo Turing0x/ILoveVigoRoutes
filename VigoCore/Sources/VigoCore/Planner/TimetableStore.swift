@@ -1,8 +1,12 @@
 import Foundation
 
-/// Caches built `Timetable` snapshots, keyed by anchor day and the feed's own
-/// `importedAt` — a snapshot built before a refresh describes a timetable that no longer
+/// Caches built `Timetable` snapshots, keyed by anchor day, mobility profile, and the feed's
+/// own `importedAt` — a snapshot built before a refresh describes a timetable that no longer
 /// exists, and the fingerprint in the key makes sure a stale one is never handed out.
+///
+/// The default capacity is six rather than three because the profile joined the key (C3):
+/// three days' worth of snapshots for each of the two profiles, so switching between them
+/// does not evict the day the user is looking at.
 ///
 /// The second actor in the package, alongside `ThrottledRealtimeProvider`, but a plainer
 /// one: `TimetableBuilder.build` has no suspension point inside it, so — unlike the
@@ -21,12 +25,19 @@ public actor TimetableStore {
     private let repository: TransitRepository
     private let options: PlannerOptions
     private let capacity: Int
-    private let footpaths: FootpathTable
+    /// An explicit override, or `nil` to use the measured table for whichever profile is
+    /// asked for. Tests inject `.empty` here; the app passes nothing.
+    private let footpaths: FootpathTable?
     private let holidays: HolidayCalendar
 
     private struct CacheKey: Hashable {
         let anchor: ServiceDate
         let feedFingerprint: Date?
+        /// C3. Two profiles produce genuinely different timetables — 62 of the measured
+        /// transfers exist on foot and not in a wheelchair — so a snapshot built for one is
+        /// wrong for the other. Without this in the key the second profile to ask would be
+        /// served the first one's footpaths, silently.
+        let profile: AccessibilityProfile
     }
 
     private var snapshots: [CacheKey: Timetable] = [:]
@@ -35,7 +46,7 @@ public actor TimetableStore {
     private var recency: [CacheKey] = []
 
     public init(repository: TransitRepository, options: PlannerOptions = PlannerOptions(),
-                capacity: Int = 3, footpaths: FootpathTable = .bundled,
+                capacity: Int = 6, footpaths: FootpathTable? = nil,
                 holidays: HolidayCalendar = .bundled) {
         self.repository = repository
         self.options = options
@@ -44,17 +55,20 @@ public actor TimetableStore {
         self.holidays = holidays
     }
 
-    public func timetable(anchor: ServiceDate) throws -> Timetable {
+    public func timetable(anchor: ServiceDate,
+                          profile: AccessibilityProfile = .standard) throws -> Timetable {
         let fingerprint = try repository.feedStatus().importedAt
-        let key = CacheKey(anchor: anchor, feedFingerprint: fingerprint)
+        let key = CacheKey(anchor: anchor, feedFingerprint: fingerprint, profile: profile)
 
         if let cached = snapshots[key] {
             touch(key)
             return cached
         }
 
-        let built = try TimetableBuilder(repository: repository, options: options,
-                                         footpaths: footpaths,
+        var profileOptions = options
+        profileOptions.accessibility = profile
+        let built = try TimetableBuilder(repository: repository, options: profileOptions,
+                                         footpaths: footpaths ?? .bundled(for: profile),
                                          holidays: holidays).build(anchor: anchor)
         snapshots[key] = built
         touch(key)

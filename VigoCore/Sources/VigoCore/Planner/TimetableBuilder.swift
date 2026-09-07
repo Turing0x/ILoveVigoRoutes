@@ -25,11 +25,13 @@ public struct TimetableBuilder: Sendable {
     public let holidays: HolidayCalendar
 
     public init(repository: TransitRepository, options: PlannerOptions = PlannerOptions(),
-                footpaths: FootpathTable = .bundled,
+                footpaths: FootpathTable? = nil,
                 holidays: HolidayCalendar = .bundled) {
         self.repository = repository
         self.options = options
-        self.footpaths = footpaths
+        // Defaults to the table for the options' own profile, so a caller cannot pick a
+        // wheelchair profile and silently get walking distances.
+        self.footpaths = footpaths ?? .bundled(for: options.accessibility)
         self.holidays = holidays
     }
 

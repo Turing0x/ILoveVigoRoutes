@@ -5,9 +5,18 @@ public struct PlanQuery: Sendable, Hashable {
     public let destination: Place
     /// Earliest the journey may leave. "Salir ahora" is just `Date()` passed here.
     public let departure: Date
+    /// How the traveller gets about on foot (C3).
+    ///
+    /// A property of the question, not of the app. Somebody may plan one journey for
+    /// themselves and the next for a relative, and a setting stored at launch would make
+    /// that a trip to the settings screen and back. It is also what lets one `JourneyPlanner`
+    /// and one `TimetableStore` serve both profiles.
+    public let accessibility: AccessibilityProfile
 
-    public init(origin: Place, destination: Place, departure: Date) {
+    public init(origin: Place, destination: Place, departure: Date,
+                accessibility: AccessibilityProfile = .standard) {
         self.origin = origin; self.destination = destination; self.departure = departure
+        self.accessibility = accessibility
     }
 }
 
@@ -78,6 +87,11 @@ public struct JourneyPlanner: Sendable {
 
     public func plan(_ query: PlanQuery) async throws -> PlanResult {
         let started = Date()
+        // The profile belongs to the request, so every walking figure in this search comes
+        // from options that already know it — the speed, the detour factors and, through
+        // `store`, which measured street network the transfers were routed over.
+        var options = self.options
+        options.accessibility = query.accessibility
         let walk = WalkModel(options: options)
 
         func finish(_ outcome: PlanOutcome, feedStatus: FeedStatus,
@@ -127,7 +141,7 @@ public struct JourneyPlanner: Sendable {
         }
         let schedule = resolved.source
 
-        let timetable = try await store.timetable(anchor: day)
+        let timetable = try await store.timetable(anchor: day, profile: query.accessibility)
         let accessWalks = access.compactMap { nearby -> StopWalk? in
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
             return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres,
@@ -145,7 +159,8 @@ public struct JourneyPlanner: Sendable {
         // once several run back to back. Detaching hands the whole batch to a background
         // thread; only the tiny result crosses back.
         let alternatives = try await Task.detached(priority: .userInitiated) {
-            self.scan(timetable: timetable, access: accessWalks, egress: egressWalks, query: query)
+            self.scan(timetable: timetable, access: accessWalks, egress: egressWalks,
+                      query: query, options: options)
         }.value
 
         // A direct walk has no radius limit of its own, but one that would take longer than
@@ -180,7 +195,7 @@ public struct JourneyPlanner: Sendable {
         guard walkIsViable else {
             return finish(.journeys(alternatives), feedStatus: feedStatus, schedule: schedule)
         }
-        return finish(.journeys(ranked(alternatives + [walkOnlyJourney()])),
+        return finish(.journeys(ranked(alternatives + [walkOnlyJourney()], options)),
                       feedStatus: feedStatus, schedule: schedule)
     }
 
@@ -196,7 +211,7 @@ public struct JourneyPlanner: Sendable {
     /// the work and the search horizon bounds how far ahead the last pass may look, so the
     /// loop always terminates.
     private func scan(timetable: Timetable, access: [StopWalk], egress: [StopWalk],
-                     query: PlanQuery) -> [Journey] {
+                     query: PlanQuery, options: PlannerOptions) -> [Journey] {
         let start = Int32(timetable.axisSeconds(for: query.departure))
         // The one place an external `Date` enters the axis `RaptorEngine` does its `&+`/`&-`
         // arithmetic on (H-16, `Timetable`'s own doc comment has the full argument). `plan`
@@ -211,20 +226,22 @@ public struct JourneyPlanner: Sendable {
 
         for _ in 0..<max(1, options.maxDepartureScans) {
             let batch = search(timetable: timetable, access: access, egress: egress,
-                               departure: departure, deadline: deadline, query: query)
+                               departure: departure, deadline: deadline, query: query,
+                               options: options)
             guard !batch.isEmpty else { break }
             collected.append(contentsOf: batch)
-            guard ranked(collected).count < options.maxCandidates,
+            guard ranked(collected, options).count < options.maxCandidates,
                   let boarding = firstBoardingSeconds(of: batch, timetable: timetable)
             else { break }
             departure = boarding &+ 1
             guard departure <= deadline else { break }
         }
-        return ranked(collected)
+        return ranked(collected, options)
     }
 
     private func search(timetable: Timetable, access: [StopWalk], egress: [StopWalk],
-                       departure: Int32, deadline: Int32, query: PlanQuery) -> [Journey] {
+                       departure: Int32, deadline: Int32, query: PlanQuery,
+                       options: PlannerOptions) -> [Journey] {
         let raptorQuery = RaptorQuery(access: access, egress: egress,
                                       departure: departure, horizon: deadline &- departure)
         let result = RaptorEngine(options: options).run(timetable, raptorQuery)
@@ -252,7 +269,7 @@ public struct JourneyPlanner: Sendable {
     /// Turns everything collected into the pool actually worth offering: no duplicates, no
     /// dominated options, nothing no criterion would want, soonest arrival first.
     ///
-    private func ranked(_ journeys: [Journey]) -> [Journey] {
+    private func ranked(_ journeys: [Journey], _ options: PlannerOptions) -> [Journey] {
         var seen = Set<Journey>()
         var unique: [Journey] = []
         for journey in journeys where seen.insert(journey).inserted { unique.append(journey) }
