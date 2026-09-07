@@ -23,6 +23,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
 | **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
 | **Auditoría del motor RAPTOR** | ✅ Tandas 1–4 hechas. Detalle en `AUDITORIA-RAPTOR.md` |
+| **Comparación con el motor del Concello** | ✅ Todos los puntos ejecutados. Detalle en `AUDITORIA-MOTOR-VS-CONCELLO.md` |
 
 ---
 
@@ -2312,3 +2313,74 @@ al trazado completo en un iPhone real, y que los marcadores de parada no se amon
 una línea con paradas muy juntas. Compilación y tests, sí; ojos sobre el simulador, no —
 las herramientas de simulador no están disponibles en esta sesión remota. Pendiente de
 comprobación por el propietario.
+
+---
+
+## Comparación con el motor del Concello (`AUDITORIA-MOTOR-VS-CONCELLO.md`)
+
+Análisis del planificador de la app oficial **Vigo+** y ejecución del plan de mejora que salió
+de él. El informe completo —con las mediciones, los dos borradores fallidos y lo que se
+retiró— está en `AUDITORIA-MOTOR-VS-CONCELLO.md`. Esto es sólo el índice.
+
+**Lo que resultó ser su motor.** La app del Concello no calcula rutas: es un cliente Cordova
+delgado sobre una instancia de **OpenTripPlanner 1.x** alojada por ellos
+(`planificador-rutas.vigo.org/otp/routers/default/plan`), con **Pelias** de geocodificador. Un
+solo feed, agencia Viguesa de Transportes, 43 rutas con servicio — **el mismo GTFS que
+nosotros**. No tienen ningún dato que no tengamos. Y **no combinan bus + ferry**: su grafo
+declara `transitModes: ["BUS"]`.
+
+**Las dos diferencias que explicaban los fallos**, ambas medidas: un grafo de calles real
+frente a nuestra línea recta (error por par de −28 % a +29 %), y un calendario de 94 días
+frente a nuestros 7.
+
+### Ejecutado
+
+| Punto | Estado | Commit |
+|---|---|---|
+| A0 · Preguntar por el feed largo | **pendiente — acción humana** | — |
+| B1 · Factores de detour asimétricos | ✅ | `d6fc02c` |
+| B2 · Footpaths reales precalculados | ✅ | `8e638b7` |
+| A1 · Versionar el feed | ❌ descartado — innecesario | — |
+| A3 · Calendario de festivos | ✅ | `93bba1e` |
+| A2 · Proyección semanal etiquetada | ✅ | `87e85ce` |
+| C1 · Coste generalizado en el corte | ✅ | `1bea79b` |
+| C2 · Rebarrido de salidas | ❌ retirado — medido, no hacía falta | — |
+| C3 · Modo silla de ruedas | ✅ | `5129ed1` |
+| D1 · Tiempo real en la primera pierna | ✅ (parte ya existía) | `28c6eba` |
+| B4 · Radio de acceso en minutos | ✅ | `8998df1` |
+| B3 · MKDirections en acceso/egreso | ✅ | `ed56c7a` |
+| Tests diferenciales contra OTP | ✅ | `db20533` |
+
+**385 → 478 tests**, 56 suites, verde. La app compila.
+
+### Lo que cambió en el motor, en una línea cada cosa
+
+- Las caminatas entre paradas ya no se estiman: están **medidas sobre OpenStreetMap** y viajan
+  en el bundle (3.220 pares). Mediana de error contra un grafo independiente: **3,6 %**, frente
+  al ±30 % de antes.
+- **Se acabó el acantilado de los siete días.** Un día fuera de la ventana toma prestados los
+  servicios del día equivalente y se etiqueta como estimado, con calendario de festivos para no
+  mentir en Navidad.
+- Un **coste generalizado** poda las alternativas que ningún criterio querría, sin tocar el
+  óptimo de ninguno.
+- **Modo silla de ruedas** con una segunda tabla de caminatas sin escaleras: 62 transbordos que
+  a pie existen y en silla no.
+- El **retraso en vivo** del primer autobús llega hasta la hora de llegada, y avisa cuando se
+  come el margen de un transbordo.
+- El radio de acceso se mide en **minutos**, no en metros.
+- **MKDirections** corrige las dos caminatas de los extremos y avisa cuando la real no cabe
+  antes de que salga el autobús.
+
+### Lo que hay que hacer y no puedo hacer yo
+
+1. **A0 — preguntar por el feed largo.** Su OTP tiene 94 días de calendario con festivos
+   correctos y el ZIP público tiene 7. Ese dato existe. Si lo publican, A2 y A3 pasan a ser un
+   respaldo en vez del camino principal.
+2. **Revisar los festivos locales cada año.** `Resources/holidays-vigo.json`, campo `local`.
+   Los fija el Concello y se publican en el DOG; no se pueden deducir. Van marcados
+   `VERIFICAR en el DOG`.
+3. **Regenerar `footpaths.csv` cuando cambien las paradas.** `Tools/build_footpaths.py`, con
+   las instrucciones en su propia cabecera.
+4. **Comprobar en dispositivo.** Nada de esto se ha probado en un iPhone real: el interruptor
+   de silla de ruedas, el aviso de horario estimado y el de «no llegas» son cambios de interfaz
+   que sólo se validan usándolos.
