@@ -82,9 +82,35 @@ public struct PlannerOptions: Sendable, Hashable {
     /// and nothing downstream can recover a connection that was never built.
     public var transferDetourFactor: Double
 
-    /// How far from the origin (or from the destination) a stop may be and still count as
-    /// a way in or out of the network. 800 m is the figure the handoff fixes.
-    public var accessRadiusMetres: Double
+    /// How long the walk to a first stop — or from a last one — may be, in minutes.
+    ///
+    /// **Minutes and not metres (B4).** A radius in metres is the same for everybody, which
+    /// is precisely wrong for the quantity it stands in for: what bounds a sensible access
+    /// walk is how long it takes, and a wheelchair user covers 800 m in thirteen minutes
+    /// where a brisk walker covers it in ten. The Concello's own planner does this — it
+    /// sends OTP a `maxWalkDistance` computed as `maxWalkTime × walkSpeed`
+    /// (`AUDITORIA-MOTOR-VS-CONCELLO.md` §2.5) — and it is the reason their "walk slowly"
+    /// setting is coherent and ours was not.
+    ///
+    /// Fifteen minutes, chosen to reproduce the 800 m straight-line radius the handoff
+    /// fixed: at 1.33 m/s through a 1.50 detour factor that is 798 m, so the default profile
+    /// reaches exactly as far as it did. Changing how far the app is willing to make someone
+    /// walk is a separate decision from expressing it in the right unit, and this commit is
+    /// only the second one.
+    ///
+    /// A wheelchair user gets the same fifteen minutes, which at 1.0 m/s is 600 m. That is
+    /// the point: the budget is the time, not the distance.
+    public var maxAccessWalkMinutes: Double
+
+    /// The radius that actually applies, in metres: `maxAccessWalkMinutes` at whatever speed
+    /// the current profile walks, undoing the detour factor so it is a straight-line radius
+    /// the way `nearbyStops` expects.
+    ///
+    /// Deriving it rather than storing it is what keeps the two from drifting: there is no
+    /// way to set a radius that disagrees with the time it is supposed to represent.
+    public var accessRadiusMetres: Double {
+        maxAccessWalkMinutes * 60 * effectiveWalkSpeed / accessDetourFactor
+    }
 
     /// How far a transfer on foot between two stops may be, in **walked** metres.
     ///
@@ -212,7 +238,7 @@ public struct PlannerOptions: Sendable, Hashable {
         wheelchairSpeedMetresPerSecond: Double = 1.0,
         accessDetourFactor: Double = 1.50,
         transferDetourFactor: Double = 1.35,
-        accessRadiusMetres: Double = 800,
+        maxAccessWalkMinutes: Double = 15,
         maxTransferWalkMetres: Double = 400,
         minTransferSeconds: Int = 60,
         footpathBufferSeconds: Int = 30,
@@ -232,7 +258,7 @@ public struct PlannerOptions: Sendable, Hashable {
         self.wheelchairSpeedMetresPerSecond = wheelchairSpeedMetresPerSecond
         self.accessDetourFactor = accessDetourFactor
         self.transferDetourFactor = transferDetourFactor
-        self.accessRadiusMetres = accessRadiusMetres
+        self.maxAccessWalkMinutes = maxAccessWalkMinutes
         self.maxTransferWalkMetres = maxTransferWalkMetres
         self.minTransferSeconds = minTransferSeconds
         self.footpathBufferSeconds = footpathBufferSeconds

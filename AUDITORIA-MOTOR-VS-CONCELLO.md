@@ -518,7 +518,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | C3 · Modo silla de ruedas | ✅ hecho | `c3` |
 | D1 · Tiempo real en la primera pierna | ✅ hecho (parcialmente ya existía) | `d1` |
 | B3 · MKDirections en acceso/egreso | pendiente | |
-| B4 · Radio en minutos | pendiente | |
+| B4 · Radio en minutos | ✅ hecho | `b4` |
 | Tests diferenciales contra OTP | pendiente | |
 
 ### A0 — Pendiente, y es tuyo
@@ -942,6 +942,41 @@ sólo la parada donde está el pasajero, y una búsqueda medio informada por dat
 respuestas sobre las que nadie puede razonar.
 
 **Verificación.** 459 tests en 53 suites, verde. Diez nuevos. La app compila.
+
+### B4 — El radio de acceso, en minutos ✅
+
+`accessRadiusMetres` era una constante de 800 m igual para todo el mundo. Eso es exactamente lo
+contrario de lo que representa: lo que acota una caminata de acceso razonable es **cuánto se
+tarda**, y quien va en silla de ruedas cubre 800 m en trece minutos donde otro los hace en
+diez. Era también por qué el modo «camino despacio» no era del todo coherente — cambiaba la
+velocidad y dejaba a todo el mundo con el mismo radio.
+
+Ahora es un presupuesto de tiempo, `maxAccessWalkMinutes`, y el radio se **deriva**:
+
+```swift
+public var accessRadiusMetres: Double {
+    maxAccessWalkMinutes * 60 * effectiveWalkSpeed / accessDetourFactor
+}
+```
+
+Es lo que hace el planificador del Concello, que manda a OTP un `maxWalkDistance` calculado
+como `maxWalkTime × walkSpeed` (§2.5).
+
+| Perfil | Presupuesto | Radio en recta |
+|---|---:|---:|
+| A pie | 15 min | **798 m** |
+| En silla | 15 min | **600 m** |
+
+Quince minutos elegidos para reproducir exactamente los 800 m que fija el handoff: cambiar
+hasta dónde está dispuesta la app a hacer andar a alguien es una decisión distinta de
+expresarla en la unidad correcta, y esto es sólo lo segundo.
+
+Derivarlo en vez de guardarlo es lo que impide que los dos números se separen: no hay forma de
+poner un radio que contradiga al tiempo que representa. Hay un test que lo comprueba desde el
+otro lado — la caminata que implica el borde del radio es exactamente el presupuesto, para los
+dos perfiles.
+
+**Verificación.** 464 tests en 54 suites, verde. Cinco nuevos. La app compila.
 
 ### B1 — Factores de detour asimétricos ✅
 

@@ -156,3 +156,59 @@ struct AccessibilityProfileTests {
         #expect(query?.accessibility == .wheelchair)
     }
 }
+
+@Suite("Radio de acceso en minutos")
+struct AccessRadiusTests {
+
+    /// B4. El radio ya no es una constante en metros: sale de un presupuesto de tiempo. Es lo
+    /// que hace coherente el modo «camino despacio», que antes cambiaba la velocidad pero
+    /// dejaba a todo el mundo con el mismo radio en metros.
+    @Test("El radio sale del presupuesto de minutos, no al revés")
+    func radiusIsDerived() {
+        var options = PlannerOptions()
+        let base = options.accessRadiusMetres
+        options.maxAccessWalkMinutes *= 2
+        #expect(abs(options.accessRadiusMetres - base * 2) < 0.001)
+    }
+
+    /// Que el radio por defecto siga siendo el que fija el handoff. Expresar la política en
+    /// la unidad correcta no debía cambiar hasta dónde llega la app.
+    @Test("Por defecto sigue alcanzando los 800 m de siempre")
+    func defaultReachIsUnchanged() {
+        #expect(abs(PlannerOptions().accessRadiusMetres - 800) < 5)
+    }
+
+    /// El mismo presupuesto de tiempo, menos distancia. Ésa es la idea entera.
+    @Test("En silla de ruedas el radio se encoge solo")
+    func wheelchairRadiusShrinks() {
+        var chair = PlannerOptions()
+        chair.accessibility = .wheelchair
+        #expect(chair.maxAccessWalkMinutes == PlannerOptions().maxAccessWalkMinutes)
+        #expect(chair.accessRadiusMetres < PlannerOptions().accessRadiusMetres)
+        // 15 min a 1,0 m/s con factor 1,50.
+        #expect(abs(chair.accessRadiusMetres - 600) < 5)
+    }
+
+    /// Andar despacio también encoge el radio, que es lo que antes no pasaba.
+    @Test("Andar más despacio encoge el radio")
+    func slowerWalkerReachesLess() {
+        var slow = PlannerOptions(walkSpeedMetresPerSecond: 1.0)
+        #expect(slow.accessRadiusMetres < PlannerOptions().accessRadiusMetres)
+        slow.maxAccessWalkMinutes = 20
+        #expect(slow.accessRadiusMetres > PlannerOptions().accessRadiusMetres * 0.9,
+                "más tiempo compensa la velocidad")
+    }
+
+    /// Un radio derivado no puede contradecir al tiempo que representa: la caminata que
+    /// implica el borde del radio es exactamente el presupuesto.
+    @Test("El borde del radio cuesta exactamente el presupuesto")
+    func theEdgeCostsTheBudget() {
+        for profile in AccessibilityProfile.allCases {
+            var options = PlannerOptions()
+            options.accessibility = profile
+            let walk = WalkModel(options: options)
+            let seconds = walk.seconds(metres: options.accessRadiusMetres, as: .accessEgress)
+            #expect(abs(Double(seconds) - options.maxAccessWalkMinutes * 60) <= 1)
+        }
+    }
+}
