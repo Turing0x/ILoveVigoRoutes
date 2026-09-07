@@ -136,6 +136,18 @@ public struct PlannerOptions: Sendable, Hashable {
     /// they do want.
     public var extraTransferWorthSeconds: Int
 
+    /// How far past the feed's last observed day the planner will project a timetable.
+    ///
+    /// The published GTFS is a rolling seven-day window, so without projection every question
+    /// about next month is unanswerable — not answered badly, not answered at all. With it,
+    /// the same question gets the services of the most recent matching day, clearly labelled
+    /// as an estimate (`ServiceDayResolver`).
+    ///
+    /// Sixty days rather than the ninety-four the Concello's own planner offers: past two
+    /// months a projected timetable is fiction dressed as data, and the marginal question it
+    /// answers is rarer than the confidence it would misplace.
+    public var maxProjectionDays: Int
+
     /// How many stops `nearbyStops` may return for the access and egress searches (H-11).
     ///
     /// `TransitRepository.nearbyStops` defaults to 40, a figure sized for a search sheet's
@@ -163,7 +175,8 @@ public struct PlannerOptions: Sendable, Hashable {
         maxCandidates: Int = 8,
         maxEgressCandidates: Int = 3,
         extraTransferWorthSeconds: Int = 300,
-        maxNearbyStops: Int = 100
+        maxNearbyStops: Int = 100,
+        maxProjectionDays: Int = 60
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
         self.accessDetourFactor = accessDetourFactor
@@ -180,5 +193,6 @@ public struct PlannerOptions: Sendable, Hashable {
         self.maxEgressCandidates = maxEgressCandidates
         self.extraTransferWorthSeconds = extraTransferWorthSeconds
         self.maxNearbyStops = maxNearbyStops
+        self.maxProjectionDays = maxProjectionDays
     }
 }

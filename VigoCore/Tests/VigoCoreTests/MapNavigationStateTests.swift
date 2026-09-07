@@ -679,3 +679,78 @@ struct MapOrderingTests {
                 "el que menos anda entra aunque sea el último por llegada")
     }
 }
+
+@Suite("Aviso de horario estimado en el mapa")
+struct MapNavigationEstimateNoticeTests {
+
+    private let here = Coordinate(latitude: 42.2328, longitude: -8.7226)
+    private let there = Coordinate(latitude: 42.2400, longitude: -8.7100)
+    private let clock = Date(timeIntervalSince1970: 1_757_000_000)
+
+    /// Cualquier trayecto sirve: lo que se comprueba aquí es el aviso, no el trayecto.
+    private func anyJourney() -> Journey {
+        let a = PlannerFixture.stop("A")
+        let b = PlannerFixture.stop("B", northMetres: 1_000)
+        return Journey(legs: [
+            .walk(from: .coordinate(here, label: "O"), to: .stop(a), seconds: 120, metres: 150),
+            .ride(routeID: RouteID("r1"), routeShortName: "C1", headsign: nil,
+                  tripID: TripID("t1"), board: a, alight: b,
+                  departure: clock.addingTimeInterval(600),
+                  arrival: clock.addingTimeInterval(1_200),
+                  intermediateStops: []),
+            .walk(from: .stop(b), to: .coordinate(there, label: "D"), seconds: 90, metres: 110),
+        ], departure: clock, arrival: clock.addingTimeInterval(1_290), transfers: 0)
+    }
+
+    private func planned(_ schedule: ServiceDaySource) -> MapNavigationState {
+        var state = MapNavigationState()
+        state.planningStarted()
+        state.planningFinished(.journeys([anyJourney()]), schedule: schedule)
+        return state
+    }
+
+    @Test("Un horario observado no lleva aviso")
+    func observedHasNoNotice() {
+        #expect(planned(.observed).estimateNotice == nil)
+    }
+
+    @Test("Un horario proyectado lleva aviso, y dice de qué día sale")
+    func projectedHasNotice() {
+        let template = ServiceDate(yyyymmdd: 20_260_904)
+        let notice = planned(.projected(template: template)).estimateNotice
+        #expect(notice != nil)
+        #expect(notice?.contains(template.humanReadable) == true)
+    }
+
+    /// El invariante que motivó atar el aviso a `route` en vez de sólo a `schedule`: seis
+    /// transiciones distintas devuelven la ruta a `.idle`, y pedirle a cada una que se
+    /// acuerde de limpiar el horario es justo la clase de contabilidad que se pudre. Basta
+    /// un sitio olvidado para que un aviso de "estimado" quede flotando sobre resultados
+    /// firmes.
+    @Test("El aviso no sobrevive a que se vacíe la ruta")
+    func noticeDiesWithTheRoute() {
+        var state = planned(.projected(template: ServiceDate(yyyymmdd: 20_260_904)))
+        #expect(state.estimateNotice != nil)
+
+        state.reset()
+        #expect(state.estimateNotice == nil, "una ruta vacía no tiene horarios que matizar")
+    }
+
+    @Test("Una búsqueda nueva sin proyección limpia el aviso de la anterior")
+    func aFreshSearchClearsIt() {
+        var state = planned(.projected(template: ServiceDate(yyyymmdd: 20_260_904)))
+        #expect(state.estimateNotice != nil)
+
+        state.planningStarted()
+        state.planningFinished(.journeys([anyJourney()]), schedule: .observed)
+        #expect(state.estimateNotice == nil)
+    }
+
+    @Test("Un fallo tampoco arrastra el aviso")
+    func failureCarriesNoNotice() {
+        var state = planned(.projected(template: ServiceDate(yyyymmdd: 20_260_904)))
+        state.planningStarted()
+        state.planningFinished(.noJourneyFound(horizon: 3_600), schedule: .observed)
+        #expect(state.estimateNotice == nil)
+    }
+}

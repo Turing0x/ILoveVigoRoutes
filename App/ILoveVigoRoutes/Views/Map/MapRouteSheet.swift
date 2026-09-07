@@ -243,6 +243,15 @@ struct MapRouteSheet: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
+                    // A2. Above the other footnotes and in the warning colour, because it
+                    // is not a footnote: it says these times are an estimate rather than
+                    // the operator's data. `estimateNotice` is `nil` whenever the schedule
+                    // is observed, so this costs nothing on the common path.
+                    if let estimate = state.estimateNotice {
+                        Label(estimate, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.footnote)
+                    }
                     if state.route.isWalkOnly {
                         Text(PlanOutcomeMessage.walkOnlyExplanation)
                     }

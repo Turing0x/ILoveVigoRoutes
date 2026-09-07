@@ -265,7 +265,7 @@ final class MapScreenModel {
         state.planningStarted()
         do {
             let result = try await planner.plan(query)
-            state.planningFinished(result.outcome)
+            state.planningFinished(result.outcome, schedule: result.schedule)
             plannedAt = Date()
             await redraw()
         } catch {

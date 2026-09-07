@@ -259,7 +259,32 @@ public struct MapNavigationState: Sendable {
     }
 
     /// Folds a `PlanOutcome` into the three shapes the UI draws.
-    public mutating func planningFinished(_ outcome: PlanOutcome) {
+    /// How the schedule behind the current answer was arrived at (A2).
+    ///
+    /// Held on the state rather than derived at render time because the view that shows it
+    /// is not the one that ran the plan, and a projected answer must not survive into the
+    /// next search: `planningFinished` resets it every time, so a stale "estimated" banner
+    /// over firm data is unrepresentable.
+    public private(set) var schedule: ServiceDaySource = .observed
+
+    /// The sentence to show above the alternatives, or `nil` when there is nothing to
+    /// qualify — either because the data is the operator's own, or because there are no
+    /// journeys on screen to qualify in the first place.
+    ///
+    /// Gated on `route` rather than on `schedule` alone. Six different transitions reset the
+    /// route to `.idle` (clearing an endpoint, picking a new place, `reset`), and requiring
+    /// each of them to remember to clear the schedule as well is exactly the kind of
+    /// bookkeeping that rots — one missed site and an "estimated" banner floats above a
+    /// perfectly firm set of results. Tying the notice to the thing it annotates makes the
+    /// stale state unreachable instead of merely unlikely.
+    public var estimateNotice: String? {
+        guard case .alternatives = route else { return nil }
+        return PlanOutcomeMessage.estimateNotice(schedule)
+    }
+
+    public mutating func planningFinished(_ outcome: PlanOutcome,
+                                          schedule: ServiceDaySource = .observed) {
+        self.schedule = schedule
         switch outcome {
         case .journeys(let journeys):
             // An empty list is not a success with nothing in it; it is the same "found
@@ -279,6 +304,7 @@ public struct MapNavigationState: Sendable {
     /// so honestly instead of dressing it up as "no route found".
     public mutating func planningFailed() {
         route = .idle
+        schedule = .observed
     }
 
     // MARK: - Alternatives

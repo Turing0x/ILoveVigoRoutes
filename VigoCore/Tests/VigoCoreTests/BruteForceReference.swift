@@ -249,7 +249,7 @@ enum RandomPlannerFixture {
             footpathOffset: footpathOffset, footpathTarget: footpathTarget,
             footpathSeconds: footpathSeconds,
             anchorDay: anchor, anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [anchor], feedFingerprint: nil)
+            coveredDays: [anchor], coveredDaySources: [.observed], feedFingerprint: nil)
 
         let accessCount = Int.random(in: 1...min(3, stopCount), using: &rng)
         let access = (0..<stopCount).shuffled(using: &rng).prefix(accessCount).map {

@@ -187,7 +187,8 @@ struct JourneyReconstructionTests {
             stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 0, 1],
             footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
 
         return (timetable, 0, 1, 2)
     }
@@ -248,7 +249,8 @@ struct JourneyReconstructionTests {
             stopPatternPattern: [0, 0], stopPatternPosition: [0, 1],
             footpathOffset: [0, 0, 1, 2], footpathTarget: [2, 1], footpathSeconds: [120, 120],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2)
     }
 
@@ -311,7 +313,8 @@ struct JourneyReconstructionTests {
             footpathOffset: [0, 0, 1, 3, 4, 4],
             footpathTarget: [2, 1, 3, 2], footpathSeconds: [120, 120, 60, 60],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2, 3, 4)
     }
 
@@ -438,7 +441,8 @@ struct JourneyReconstructionTests {
             stopPatternPattern: [0, 1, 1, 2, 0, 2], stopPatternPosition: [0, 0, 1, 0, 1, 1],
             footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
 
         return (timetable, 0, 2)
     }

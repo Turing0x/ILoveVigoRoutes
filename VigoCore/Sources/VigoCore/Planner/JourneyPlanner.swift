@@ -36,6 +36,24 @@ public struct PlanResult: Sendable {
     public let outcome: PlanOutcome
     public let feedStatus: FeedStatus
     public let computeDuration: TimeInterval
+
+    /// Whether the timetable behind these journeys was observed or projected (A2).
+    ///
+    /// **Never merely decorative.** The published feed covers seven days; beyond that the
+    /// planner reuses the services of the most recent matching day, and the operator will
+    /// have changed some of them by the time that day arrives. A caller that shows these
+    /// times without saying so is presenting a guess as the operator's own data, which is
+    /// the one thing `README.md` rules out. `PlanOutcomeMessage.estimateNotice` is the
+    /// sentence to show.
+    public let schedule: ServiceDaySource
+
+    public init(outcome: PlanOutcome, feedStatus: FeedStatus,
+                computeDuration: TimeInterval, schedule: ServiceDaySource = .observed) {
+        self.outcome = outcome
+        self.feedStatus = feedStatus
+        self.computeDuration = computeDuration
+        self.schedule = schedule
+    }
 }
 
 /// The public facade: resolves places to stops, checks the feed can answer the question at
@@ -45,21 +63,28 @@ public struct JourneyPlanner: Sendable {
     let repository: TransitRepository
     let store: TimetableStore
     let options: PlannerOptions
+    /// Must be the same calendar `store` builds its timetables with, or the planner would
+    /// label an answer by one rule and compute it by another.
+    let holidays: HolidayCalendar
 
     public init(repository: TransitRepository, store: TimetableStore,
-                options: PlannerOptions = PlannerOptions()) {
+                options: PlannerOptions = PlannerOptions(),
+                holidays: HolidayCalendar = .bundled) {
         self.repository = repository
         self.store = store
         self.options = options
+        self.holidays = holidays
     }
 
     public func plan(_ query: PlanQuery) async throws -> PlanResult {
         let started = Date()
         let walk = WalkModel(options: options)
 
-        func finish(_ outcome: PlanOutcome, feedStatus: FeedStatus) -> PlanResult {
+        func finish(_ outcome: PlanOutcome, feedStatus: FeedStatus,
+                    schedule: ServiceDaySource = .observed) -> PlanResult {
             PlanResult(outcome: outcome, feedStatus: feedStatus,
-                      computeDuration: Date().timeIntervalSince(started))
+                       computeDuration: Date().timeIntervalSince(started),
+                       schedule: schedule)
         }
 
         let feedStatus = try repository.feedStatus()
@@ -81,13 +106,26 @@ public struct JourneyPlanner: Sendable {
         }
 
         let day = ServiceDate(query.departure, calendar: repository.calendar)
-        guard let window = feedStatus.window, window.contains(day) else {
+        // A2. The feed's seven-day window is no longer the end of the conversation: a day
+        // past it can borrow the services of the most recent day of the same kind, and the
+        // answer says so. `.outsideFeedWindow` now means what it says — nobody can answer
+        // this, not even by estimate — rather than "the feed is a week long".
+        let resolver = try repository.serviceDayResolver(
+            holidays: holidays, maxProjectionDays: options.maxProjectionDays)
+        guard let resolved = resolver.resolve(day) else {
             let reported = feedStatus.window ?? (day...day)
+            // Inside the window with nothing running is a different fact from beyond it,
+            // and the two send the user to different places: one waits for a refresh, the
+            // other picks another day.
+            if let window = feedStatus.window, window.contains(day) {
+                return finish(.noServiceOnDay(day), feedStatus: feedStatus)
+            }
             return finish(.outsideFeedWindow(reported), feedStatus: feedStatus)
         }
-        guard try !repository.activeServiceIDs(on: day).isEmpty else {
+        guard try !repository.activeServiceIDs(on: resolved.template).isEmpty else {
             return finish(.noServiceOnDay(day), feedStatus: feedStatus)
         }
+        let schedule = resolved.source
 
         let timetable = try await store.timetable(anchor: day)
         let accessWalks = access.compactMap { nearby -> StopWalk? in
@@ -127,9 +165,10 @@ public struct JourneyPlanner: Sendable {
 
         guard !alternatives.isEmpty else {
             guard walkIsViable else {
-                return finish(.noJourneyFound(horizon: options.searchHorizon), feedStatus: feedStatus)
+                return finish(.noJourneyFound(horizon: options.searchHorizon), feedStatus: feedStatus,
+                              schedule: schedule)
             }
-            return finish(.walkOnly(walkOnlyJourney()), feedStatus: feedStatus)
+            return finish(.walkOnly(walkOnlyJourney()), feedStatus: feedStatus, schedule: schedule)
         }
         // H-19: the walk is folded into the same pool the bus alternatives came from,
         // rather than replacing them outright whenever it happens to arrive first. Under
@@ -139,9 +178,10 @@ public struct JourneyPlanner: Sendable {
         // way — is exactly the alternative that criterion exists to surface, not to hide
         // behind a walk that merely has the earliest raw arrival.
         guard walkIsViable else {
-            return finish(.journeys(alternatives), feedStatus: feedStatus)
+            return finish(.journeys(alternatives), feedStatus: feedStatus, schedule: schedule)
         }
-        return finish(.journeys(ranked(alternatives + [walkOnlyJourney()])), feedStatus: feedStatus)
+        return finish(.journeys(ranked(alternatives + [walkOnlyJourney()])),
+                      feedStatus: feedStatus, schedule: schedule)
     }
 
     // MARK: - Alternatives across departures

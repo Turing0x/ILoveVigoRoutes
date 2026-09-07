@@ -199,7 +199,8 @@ struct RaptorEngineTests {
             stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 1, 0],
             footpathOffset: [0, 0, 1, 2, 2], footpathTarget: [2, 1], footpathSeconds: [120, 120],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2, 3)
     }
 
@@ -255,7 +256,8 @@ struct RaptorEngineTests {
             stopPatternPattern: [0, 1, 0, 1], stopPatternPosition: [0, 0, 1, 1],
             footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2)
     }
 
@@ -301,7 +303,8 @@ struct RaptorEngineTests {
             footpathOffset: [0, 0, 1, 1, 2, 2],
             footpathTarget: [4, 4], footpathSeconds: [100, 0],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 2, 4)
     }
 
@@ -345,7 +348,8 @@ struct RaptorEngineTests {
             stopPatternPattern: [0, 0, 0], stopPatternPosition: [0, 1, 2],
             footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2)
     }
 
@@ -404,7 +408,8 @@ struct RaptorEngineTests {
             stopPatternPattern: [0, 0, 0], stopPatternPosition: [0, 1, 2],
             footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2)
     }
 

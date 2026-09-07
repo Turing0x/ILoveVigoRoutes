@@ -20,12 +20,17 @@ public struct TimetableBuilder: Sendable {
     /// injectable so a test can build a timetable over hand-made geometry without the real
     /// table's three thousand pairs quietly deciding the answer.
     public let footpaths: FootpathTable
+    /// Which days run a holiday timetable. Only the projection consults it; an observed day
+    /// is never reinterpreted. Injectable for the same reason `footpaths` is.
+    public let holidays: HolidayCalendar
 
     public init(repository: TransitRepository, options: PlannerOptions = PlannerOptions(),
-                footpaths: FootpathTable = .bundled) {
+                footpaths: FootpathTable = .bundled,
+                holidays: HolidayCalendar = .bundled) {
         self.repository = repository
         self.options = options
         self.footpaths = footpaths
+        self.holidays = holidays
     }
 
     /// A trip as read from the database, before it is grouped into a pattern.
@@ -73,23 +78,38 @@ public struct TimetableBuilder: Sendable {
         // onto the anchor's axis rather than kept as separate days, because RAPTOR
         // compares times and cannot be asked to compare "25:10 on Friday" with
         // "01:15 on Saturday".
+        // Days the feed does not reach borrow another day's services (A2). The resolver is
+        // built once here rather than per day: it reads every observed day out of the
+        // database, and doing that three times per timetable would triple a query that is
+        // already the expensive part of a cache miss.
+        let resolver = try repository.serviceDayResolver(
+            holidays: holidays, maxProjectionDays: options.maxProjectionDays)
+
         var raws: [RawTrip] = []
         var covered: [ServiceDate] = []
+        var sources: [ServiceDaySource] = []
         for dayShift in -1...1 {
             guard let day = anchor.adding(days: dayShift, calendar: calendar),
                   let midnight = day.startOfDay(in: calendar) else { continue }
             // The real distance between the two midnights, not a hardcoded 86400. Twice a
             // year consecutive midnights in Madrid are 23 or 25 hours apart, and an hour
             // of error would land squarely on the night lines.
+            //
+            // Note this is `day`'s own midnight even when `day` is projected: the services
+            // are borrowed from the template, the clock is not. Projecting the last Sunday
+            // in October — the one the clocks change on — onto a November Sunday would
+            // otherwise carry a 25-hour day along with it.
             let offset = Int32(midnight.timeIntervalSince(anchorMidnight).rounded())
 
-            let services = try repository.activeServiceIDs(on: day)
+            guard let resolved = resolver.resolve(day) else { continue }
+            let services = try repository.activeServiceIDs(on: resolved.template)
                 .sorted { $0.rawValue < $1.rawValue }
             guard !services.isEmpty else { continue }
 
             covered.append(day)
+            sources.append(resolved.source)
             raws.append(contentsOf: try trips(
-                on: day, services: services, offset: offset,
+                on: resolved.template, services: services, offset: offset,
                 onlyPastMidnight: dayShift < 0, stopIndexByID: stopIndexByID))
         }
 
@@ -192,7 +212,7 @@ public struct TimetableBuilder: Sendable {
             footpathTarget: footpathTarget,
             footpathSeconds: footpathSeconds,
             anchorDay: anchor, anchorMidnight: anchorMidnight,
-            coveredDays: covered,
+            coveredDays: covered, coveredDaySources: sources,
             feedFingerprint: try repository.feedStatus().importedAt)
     }
 

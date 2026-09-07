@@ -397,6 +397,55 @@ public struct TransitRepository: Sendable {
         try database.writer.read { db in try Self.activeServiceIDs(db, date, calendar) }
     }
 
+    /// Every date the feed describes **and** actually runs buses on.
+    ///
+    /// The templates `ServiceDayResolver` may project from. Deliberately not the feed's
+    /// window: a date the window nominally covers but for which every service was cancelled
+    /// is worse than useless as a template, because projecting it would hand every future
+    /// day of that weekday a timetable with no buses in it.
+    ///
+    /// Read straight from `calendarDate` rather than by walking the window a day at a time —
+    /// the published feed defines all 702 of its rows there and `calendar.txt` is empty, but
+    /// a feed that used weekly entries instead would still be covered, because the union
+    /// below is intersected with what `activeServiceIDs` says for each candidate date.
+    public func observedServiceDays() throws -> Set<ServiceDate> {
+        try database.writer.read { db in
+            var candidates = Set<Int>()
+            candidates.formUnion(try Int.fetchAll(db, sql: "SELECT DISTINCT date FROM calendarDate"))
+            // Weekly entries, if this feed ever has any: every day they span is a candidate.
+            let spans = try Row.fetchAll(db, sql: "SELECT startDate, endDate FROM calendarEntry")
+            for row in spans {
+                guard let start: Int = row["startDate"], let end: Int = row["endDate"],
+                      var day = ServiceDate(yyyymmdd: start) as ServiceDate?
+                else { continue }
+                let last = ServiceDate(yyyymmdd: end)
+                var guardCount = 0
+                while day <= last, guardCount < 800 {
+                    candidates.insert(day.yyyymmdd)
+                    guard let next = day.adding(days: 1, calendar: calendar) else { break }
+                    day = next
+                    guardCount += 1
+                }
+            }
+
+            var days = Set<ServiceDate>()
+            for value in candidates {
+                let date = ServiceDate(yyyymmdd: value)
+                if try !Self.activeServiceIDs(db, date, calendar).isEmpty { days.insert(date) }
+            }
+            return days
+        }
+    }
+
+    /// The resolver for this feed, ready to answer for days the feed does not reach.
+    public func serviceDayResolver(
+        holidays: HolidayCalendar = .bundled,
+        maxProjectionDays: Int
+    ) throws -> ServiceDayResolver {
+        ServiceDayResolver(observedDays: try observedServiceDays(), holidays: holidays,
+                           calendar: calendar, maxProjectionDays: maxProjectionDays)
+    }
+
     private static func activeServiceIDs(
         _ db: Database, _ date: ServiceDate, _ calendar: Calendar
     ) throws -> Set<ServiceID> {

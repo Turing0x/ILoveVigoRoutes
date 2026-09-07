@@ -22,6 +22,7 @@ public actor TimetableStore {
     private let options: PlannerOptions
     private let capacity: Int
     private let footpaths: FootpathTable
+    private let holidays: HolidayCalendar
 
     private struct CacheKey: Hashable {
         let anchor: ServiceDate
@@ -34,11 +35,13 @@ public actor TimetableStore {
     private var recency: [CacheKey] = []
 
     public init(repository: TransitRepository, options: PlannerOptions = PlannerOptions(),
-                capacity: Int = 3, footpaths: FootpathTable = .bundled) {
+                capacity: Int = 3, footpaths: FootpathTable = .bundled,
+                holidays: HolidayCalendar = .bundled) {
         self.repository = repository
         self.options = options
         self.capacity = capacity
         self.footpaths = footpaths
+        self.holidays = holidays
     }
 
     public func timetable(anchor: ServiceDate) throws -> Timetable {
@@ -51,7 +54,8 @@ public actor TimetableStore {
         }
 
         let built = try TimetableBuilder(repository: repository, options: options,
-                                         footpaths: footpaths).build(anchor: anchor)
+                                         footpaths: footpaths,
+                                         holidays: holidays).build(anchor: anchor)
         snapshots[key] = built
         touch(key)
         while recency.count > capacity {

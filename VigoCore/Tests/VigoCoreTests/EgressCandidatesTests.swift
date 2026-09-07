@@ -94,7 +94,8 @@ struct EgressCandidatesTests {
             stopPatternPattern: [0, 0, 1, 1], stopPatternPosition: [0, 1, 0, 1],
             footpathOffset: [0, 0, 0, 0], footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, 0, 1, 2)
     }
 
@@ -224,7 +225,8 @@ struct EgressCandidatesTests {
             footpathOffset: Array(repeating: Int32(0), count: count + 2),
             footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, Array(1...count))
     }
 
@@ -304,7 +306,8 @@ struct EgressCandidatesTests {
             stopPatternPattern: stopPatternPattern, stopPatternPosition: stopPatternPosition,
             footpathOffset: Array(repeating: 0, count: 7), footpathTarget: [], footpathSeconds: [],
             anchorDay: ServiceDate(yyyymmdd: 20_260_101), anchorMidnight: Date(timeIntervalSince1970: 0),
-            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], feedFingerprint: nil)
+            coveredDays: [ServiceDate(yyyymmdd: 20_260_101)], coveredDaySources: [.observed],
+            feedFingerprint: nil)
         return (timetable, [1, 3, 5])
     }
 

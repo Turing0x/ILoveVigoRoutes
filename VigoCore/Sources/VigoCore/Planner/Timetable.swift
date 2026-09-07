@@ -99,6 +99,18 @@ public struct Timetable: Sendable {
     public let anchorMidnight: Date
     /// The service days actually folded into this snapshot, in order.
     public let coveredDays: [ServiceDate]
+
+    /// How each covered day was arrived at, in the same order as `coveredDays`.
+    ///
+    /// Carried on the timetable rather than recomputed later because this is the only place
+    /// that still knows: once the trips are folded onto one axis, a projected day and an
+    /// observed one are indistinguishable. `JourneyPlanner` reads it to label the answer.
+    public let coveredDaySources: [ServiceDaySource]
+
+    /// Whether any part of this timetable was projected rather than observed. If so, every
+    /// time it produces is an estimate — the anchor day's own trips are the bulk of any
+    /// journey, and a caller cannot usefully be told "half of this is firm".
+    public var isProjected: Bool { coveredDaySources.contains { $0.isProjected } }
     /// The `importedAt` of the feed this was built from. A snapshot built before a refresh
     /// describes a timetable that no longer exists, and the cache key has to notice.
     public let feedFingerprint: Date?
@@ -112,7 +124,8 @@ public struct Timetable: Sendable {
         stopPatternsOffset: [Int32], stopPatternPattern: [Int32], stopPatternPosition: [Int32],
         footpathOffset: [Int32], footpathTarget: [Int32], footpathSeconds: [Int32],
         anchorDay: ServiceDate, anchorMidnight: Date,
-        coveredDays: [ServiceDate], feedFingerprint: Date?
+        coveredDays: [ServiceDate], coveredDaySources: [ServiceDaySource],
+        feedFingerprint: Date?
     ) {
         self.stops = stops; self.stopIndexByID = stopIndexByID
         self.patternStopsOffset = patternStopsOffset; self.patternStops = patternStops
@@ -127,7 +140,8 @@ public struct Timetable: Sendable {
         self.footpathTarget = footpathTarget
         self.footpathSeconds = footpathSeconds
         self.anchorDay = anchorDay; self.anchorMidnight = anchorMidnight
-        self.coveredDays = coveredDays; self.feedFingerprint = feedFingerprint
+        self.coveredDays = coveredDays; self.coveredDaySources = coveredDaySources
+        self.feedFingerprint = feedFingerprint
     }
 
     // MARK: - Access

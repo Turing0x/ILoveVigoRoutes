@@ -22,7 +22,13 @@ private enum PlannerFacadeFixture {
     static let windowEnd = 20_260_910
     static let gapDay = ServiceDate(yyyymmdd: 20_260_905)
     static let servedDay = ServiceDate(yyyymmdd: 20_260_903)
+    /// One day past the window, and a Friday — the same weekday as the observed 4th, so
+    /// A2 can project it.
     static let outsideWindowDay = ServiceDate(yyyymmdd: 20_260_911)
+    /// The Friday the 11th borrows its services from.
+    static let projectionTemplate = ServiceDate(yyyymmdd: 20_260_904)
+    /// Far enough past the window that projecting would be fiction.
+    static let unprojectableDay = ServiceDate(yyyymmdd: 20_270_601)
 
     private static var stopsCSV: String {
         var lines = ["stop_id,stop_code,stop_name,stop_lat,stop_lon,wheelchair_boarding"]
@@ -76,7 +82,8 @@ private enum PlannerFacadeFixture {
     static func planner(repository: TransitRepository, options: PlannerOptions = PlannerOptions())
         -> JourneyPlanner {
         JourneyPlanner(repository: repository,
-                      store: TimetableStore(repository: repository, options: options),
+                      store: TimetableStore(repository: repository, options: options,
+                                            footpaths: .empty),
                       options: options)
     }
 
@@ -188,8 +195,12 @@ struct JourneyPlannerTests {
         #expect(radius == PlannerOptions().accessRadiusMetres)
     }
 
-    @Test("A day past the feed's window is 'no data for that day', not 'no service'")
-    func outsideFeedWindow() async throws {
+    /// A2. This used to assert `.outsideFeedWindow` for any day past the window, which was
+    /// the seven-day cliff itself: the feed is a rolling week, so "next Tuesday" had no
+    /// answer at all. Now such a day borrows the services of the most recent day of the same
+    /// kind, and the result says which.
+    @Test("Un día pasado la ventana se responde, proyectado desde su mismo día de la semana")
+    func projectsPastTheWindow() async throws {
         let repository = try PlannerFacadeFixture.repository()
         let planner = PlannerFacadeFixture.planner(repository: repository)
         let result = try await planner.plan(PlanQuery(
@@ -197,11 +208,50 @@ struct JourneyPlannerTests {
             destination: .coordinate(Coordinate(PlannerFacadeFixture.b), label: "B"),
             departure: PlannerFacadeFixture.noon(
                 PlannerFacadeFixture.outsideWindowDay, calendar: repository.calendar)))
+
+        if case .outsideFeedWindow = result.outcome {
+            Issue.record("un día proyectable no debe rechazarse"); return
+        }
+        #expect(result.schedule == .projected(template: PlannerFacadeFixture.projectionTemplate))
+        // Y se etiqueta. Una estimación sin decir que lo es sería peor que no responder.
+        let notice = PlanOutcomeMessage.estimateNotice(result.schedule)
+        #expect(notice != nil)
+        #expect(notice?.contains(PlannerFacadeFixture.projectionTemplate.humanReadable) == true,
+                "el aviso tiene que decir de qué día salen los horarios")
+    }
+
+    /// The horizon still has to exist, or the planner would answer for any date at all with
+    /// a week-old timetable and call it an estimate.
+    @Test("Más allá del horizonte de proyección se sigue diciendo que no hay datos")
+    func refusesBeyondProjectionHorizon() async throws {
+        let repository = try PlannerFacadeFixture.repository()
+        let planner = PlannerFacadeFixture.planner(repository: repository)
+        let result = try await planner.plan(PlanQuery(
+            origin: .coordinate(Coordinate(PlannerFacadeFixture.a), label: "A"),
+            destination: .coordinate(Coordinate(PlannerFacadeFixture.b), label: "B"),
+            departure: PlannerFacadeFixture.noon(
+                PlannerFacadeFixture.unprojectableDay, calendar: repository.calendar)))
         guard case .outsideFeedWindow(let window) = result.outcome else {
             Issue.record("expected .outsideFeedWindow, got \(result.outcome)"); return
         }
         #expect(window.lowerBound.yyyymmdd == PlannerFacadeFixture.windowStart)
         #expect(window.upperBound.yyyymmdd == PlannerFacadeFixture.windowEnd)
+        #expect(result.schedule == .observed, "no se proyectó nada, así que no hay nada que estimar")
+    }
+
+    /// The other half of the contract, and the one that protects every answer the app gave
+    /// before A2 existed: a day the feed does cover is never estimated.
+    @Test("Un día observado no se marca como estimado")
+    func observedDayIsNotLabelled() async throws {
+        let repository = try PlannerFacadeFixture.repository()
+        let planner = PlannerFacadeFixture.planner(repository: repository)
+        let result = try await planner.plan(PlanQuery(
+            origin: .coordinate(Coordinate(PlannerFacadeFixture.a), label: "A"),
+            destination: .coordinate(Coordinate(PlannerFacadeFixture.b), label: "B"),
+            departure: PlannerFacadeFixture.noon(
+                PlannerFacadeFixture.servedDay, calendar: repository.calendar)))
+        #expect(result.schedule == .observed)
+        #expect(PlanOutcomeMessage.estimateNotice(result.schedule) == nil)
     }
 
     @Test("A gap day inside the window is 'no service', not 'no data'")

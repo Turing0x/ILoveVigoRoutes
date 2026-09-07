@@ -42,12 +42,18 @@ public enum PlanOutcomeMessage {
             return "No hay ninguna parada a menos de \(metres(radius)) m del \(destination(context))."
 
         case .outsideFeedWindow(let window):
-            // The dates are the whole message. The published feed only ever covers seven
-            // days, so "no data for that date" without saying which dates *do* work leaves
-            // the user with nothing to act on.
+            // The dates are the whole message. "No data for that date" without saying which
+            // dates *do* work leaves the user with nothing to act on.
+            //
+            // Since A2 this outcome is much rarer and means something narrower than it used
+            // to: not "the feed is a week long" — days past the window are estimated now —
+            // but "not even an estimate is possible here", i.e. a date in the past or far
+            // enough ahead that reusing an old week would be fiction. The wording says
+            // "confirmados" because dates outside the window are no longer simply refused.
             return """
-                No tengo datos para esa fecha. Los horarios importados cubren del \
-                \(window.lowerBound.humanReadable) al \(window.upperBound.humanReadable).
+                No tengo datos confirmados para esa fecha, ni forma de estimarla. Los \
+                horarios importados cubren del \(window.lowerBound.humanReadable) al \
+                \(window.upperBound.humanReadable).
                 """
 
         case .noServiceOnDay(let day):
@@ -68,6 +74,28 @@ public enum PlanOutcomeMessage {
     /// explanation no longer has to speak of buses that were merely slower.
     public static let walkOnlyExplanation =
         "Ningún autobús llega hasta aquí."
+
+    /// The sentence that has to accompany a projected timetable (A2), or `nil` when the
+    /// schedule is the operator's own data.
+    ///
+    /// Returning `nil` for `.observed` is the same contract as `failure`: a caller that shows
+    /// this unconditionally would be hedging an answer that needs no hedge, and a warning
+    /// that appears every time stops being read.
+    ///
+    /// The template's date is in the text on purpose. "Estimated" alone is not actionable —
+    /// it tells the user to distrust the answer without telling them how much. Naming the day
+    /// the times actually come from lets them judge it: a Tuesday borrowed from last Tuesday
+    /// is worth acting on, the same Tuesday borrowed from two months ago is worth checking.
+    public static func estimateNotice(_ schedule: ServiceDaySource) -> String? {
+        switch schedule {
+        case .observed:
+            return nil
+        case .projected(let template):
+            return """
+                Horario estimado: los datos del Concello no llegan a esta fecha, así que se                 han reutilizado los del \(template.humanReadable). Confírmalo antes de contar                 con él.
+                """
+        }
+    }
 
     // MARK: - Detalles
 

@@ -511,7 +511,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 | B1 · Factores de detour asimétricos | ✅ hecho | `b1` |
 | B2 · Footpaths reales precalculados | ✅ hecho | `b2` |
 | A1 · Versionar el feed | ❌ **descartado — innecesario** | — |
-| A2 · Proyección semanal etiquetada | pendiente | |
+| A2 · Proyección semanal etiquetada | ✅ hecho | `a2` |
 | A3 · Calendario de festivos | ✅ hecho | `a3` |
 | C1 · Coste generalizado en el corte | pendiente | |
 | C2 · Rebarrido de salidas | pendiente | |
@@ -672,6 +672,65 @@ más allá de los años expandidos en vez de adivinar.
 12 de octubre de 2026 es lunes y el planificador del Concello devuelve para ese día horario de
 domingo (§2.8). Es la observación que motivó el fichero y la primera que se rompería si
 alguien lo vaciara.
+
+### A2 — Proyección semanal etiquetada ✅
+
+**El acantilado de los siete días ha desaparecido.** Antes, cualquier consulta a más de seis
+días vista devolvía `.outsideFeedWindow`: no una respuesta mala, **ninguna**. Ahora un día que
+el feed no alcanza toma prestados los servicios del día equivalente más reciente, y la
+respuesta dice que es una estimación.
+
+**Qué se proyecta.** Sólo el **conjunto de `service_id`** que circulan ese día. Los viajes de
+esos servicios y sus horarios ya están en la base: los trajo el feed de esta semana. Cero
+duplicación, cero migración de esquema, cero coste en disco.
+
+**Las reglas, y por qué cada una** (`ServiceDayResolver`):
+
+| Regla | Motivo |
+|---|---|
+| Un día observado nunca se proyecta | El dato real siempre gana. Es lo que garantiza que un error en el calendario de festivos no pueda corromper una respuesta firme |
+| El pasado se rechaza | Nadie planifica un viaje para el martes pasado, y proyectar hacia atrás sería responder a una pregunta sobre el pasado con una conjetura sobre él |
+| Más de 60 días, se rechaza | Un horario proyectado a tres meses es ficción disfrazada de dato |
+| Un año sin calendario de festivos, se rechaza | Sin él no hay forma de distinguir un martes normal de Navidad. Proyectar a ciegas es la respuesta falsa silenciosa que este proyecto prohíbe |
+| Un festivo se proyecta desde un domingo | Es el horario que circula |
+| Un festivo nunca es plantilla | La dirección fácil de olvidar: una semana capturada con el 12 de octubre dentro propagaría horario de festivo a todos los lunes durante dos meses |
+
+Sesenta días y no los noventa y cuatro del Concello: pasados dos meses la pregunta que se
+responde es más rara que la confianza que se colocaría mal.
+
+**Sólo días con servicio real sirven de plantilla.** `observedServiceDays()` devuelve los días
+que el feed describe **y** en los que circula algo. Un día cubierto pero con todos los
+servicios cancelados no es plantilla de nada: proyectarlo le daría a todos los martes futuros
+un horario sin autobuses.
+
+**El reloj no se toma prestado, sólo los servicios.** El constructor usa la medianoche del día
+*consultado*, no la de la plantilla. Proyectar el último domingo de octubre —el del cambio de
+hora— sobre un domingo de noviembre arrastraría si no un día de 25 horas.
+
+**Etiquetado, y de forma accionable.** `PlanResult.schedule` lleva `.observed` o
+`.projected(template:)`. `PlanOutcomeMessage.estimateNotice` devuelve `nil` para lo observado
+—un aviso que sale siempre deja de leerse— y para lo proyectado **nombra el día del que salen
+los horarios**. «Estimado» a secas no es accionable: dice que desconfíes sin decirte cuánto. Un
+martes tomado del martes pasado se puede usar; el mismo martes tomado de hace dos meses hay que
+confirmarlo.
+
+En el mapa aparece sobre las alternativas, en naranja y con icono de aviso.
+
+**Un invariante que costó una decisión de diseño.** Seis transiciones distintas devuelven la
+ruta a `.idle`. Pedirle a cada una que se acuerde de limpiar también el horario es la clase de
+contabilidad que se pudre: un sitio olvidado y un aviso de «estimado» queda flotando sobre
+resultados firmes. Por eso `estimateNotice` está atado a `route` y no sólo a `schedule` — el
+estado obsoleto no es improbable, es **irrepresentable**.
+
+**`outsideFeedWindow` cambia de significado**, y su mensaje con él. Ya no es «el feed dura una
+semana» sino «ni siquiera se puede estimar»: una fecha pasada, o tan lejana que reutilizar una
+semana vieja sería inventar. El texto dice ahora *datos confirmados*.
+
+**Verificación.** 427 tests en 49 suites, verde. Diecisiete nuevos entre `ServiceDayResolver`,
+el planificador y el aviso del mapa — incluido uno que comprueba que un festivo mal puesto no
+puede alterar un día observado, y otro que fija que la misma pregunta da siempre la misma
+respuesta (`observedDays` es un `Set`, y depender de su orden de iteración daría horarios
+distintos en dos arranques de la misma app con los mismos datos). La app compila.
 
 ### B1 — Factores de detour asimétricos ✅
 
