@@ -509,7 +509,7 @@ Estado de cada punto del plan. Se actualiza al cerrar cada uno.
 |---|---|---|
 | A0 · Preguntar por el feed largo | **pendiente — acción humana** | — |
 | B1 · Factores de detour asimétricos | ✅ hecho | `b1` |
-| B2 · Footpaths reales precalculados | pendiente | |
+| B2 · Footpaths reales precalculados | ✅ hecho | `b2` |
 | A1 · Versionar el feed | pendiente | |
 | A2 · Proyección semanal etiquetada | pendiente | |
 | A3 · Calendario de festivos | pendiente | |
@@ -531,6 +531,91 @@ público tiene 7 días. Ese dato existe en algún sitio. Antes de invertir en A1
 
 Si la respuesta es que sí, **A1–A3 se caen enteras** y se sustituyen por cambiar una URL.
 Merece la pena preguntar antes de construir el andamio.
+
+### B2 — Footpaths reales precalculados ✅
+
+**Qué cambió.** Las distancias a pie **entre paradas** ya no se estiman: se miden una vez,
+fuera de la app, sobre el callejero peatonal de OpenStreetMap, y viajan en el bundle.
+
+- `Tools/build_footpaths.py` — construye el grafo peatonal desde un volcado de Overpass
+  (`Tools/overpass_walk.ql`), se queda con la componente conexa mayor, engancha cada parada
+  a su nodo más cercano y corre un Dijkstra acotado desde cada una.
+- `VigoCore/Sources/VigoCore/Resources/footpaths.csv` — la salida. **3.220 pares**, ~55 KB.
+- `FootpathTable` — la carga y la consulta. `WalkModel.footpaths(stops:table:)` la cree.
+
+**Lo que salió al generarla:**
+
+```
+paradas               1154
+nodos / aristas OSM   228.528 / 245.895
+componente mayor      206.249 nodos (90,3 % de lo enrutable)
+paradas enganchadas   1154   (huérfanas 0)
+pares candidatos      11.337
+pares escritos        3.220
+ratio real/recta      p10 1,07   p50 1,26   p90 2,01   máx 23,33
+```
+
+**El máximo de 23,33 es el hallazgo.** No es un error de datos, es el caso que el modelo en
+línea recta no puede ver:
+
+| Recta | Calle real | Factor | Paradas |
+|---:|---:|---:|---|
+| **5 m** | **112 m** | ×23,3 | Avda. de Samil 15 ↔ Samil por Coia |
+| 10 m | 166 m | ×16,2 | Avda. das Camelias 3 ↔ Avda. das Camelias 8 |
+| 6 m | 101 m | ×15,8 | Rúa de Tomás A. Alonso 86 ↔ 13 |
+| 14 m | 177 m | ×12,8 | Rúa do Seixo 45 ↔ 38 |
+
+Son postes gemelos a un lado y otro de una avenida sin paso de peatones entre ellos. El modelo
+antiguo le daba a ese transbordo **5 segundos**. Son 85. Cada uno de estos pares era un enlace
+que la app ofrecía y que nadie podía hacer — y son precisamente los que más aparecen, porque
+son los más cercanos.
+
+**Validación contra un grafo independiente.** Doce pares al azar de la tabla, contra el OTP del
+Concello (que enruta sobre su propio OSM):
+
+```
+error absoluto medio 10,9 %   mediana 3,6 %   máximo 47,6 %
+```
+
+Mediana del **3,6 %**, frente al ±30 % del modelo en recta. Los dos casos peores (+47 %, +32 %)
+son cruces que su grafo permite y el nuestro no; nuestro número es el conservador de los dos,
+que en un transbordo es el lado seguro.
+
+**Reglas de la tabla, y por qué.** `FootpathTable` distingue tres situaciones, porque la
+ausencia de un par significa dos cosas distintas:
+
+| Situación | Qué se hace |
+|---|---|
+| El par está medido | Se usa la distancia real |
+| Ambas paradas medidas, el par no aparece | **No hay transbordo.** El generador miró y no encontró ruta dentro del radio |
+| Alguna parada no está en la tabla | Se estima en recta, como antes |
+
+La tercera regla es la que evita que una parada nueva del feed se quede sin ningún transbordo
+hasta que alguien regenere el recurso.
+
+**Cambio de unidad.** `maxTransferWalkMetres` pasa de 300 m *en recta* a **400 m caminados**.
+No es un ensanche: 300 × 1,35 ya eran ~405 m de acera. Ahora el número significa lo que el
+pasajero recorre.
+
+**Un bug encontrado por su propio test.** `FootpathTable.load` partía el CSV con
+`split(separator: "\n")`. Swift trata `\r\n` como **un solo `Character`**, así que un fichero
+con finales de línea de Windows no se partía en absoluto: volvía como una sola línea, se
+descartaba por empezar con la cabecera, y `load` devolvía una tabla vacía **sin lanzar ningún
+error**. El planificador habría vuelto a estimar en línea recta en silencio — justo la clase de
+fallo mudo que el README prohíbe. Corregido, y con test.
+
+Por el mismo motivo hay un test que comprueba que el recurso empaquetado **existe y tiene
+forma**: `bundled` se traga cualquier fallo y degrada a `.empty` a propósito (un error de
+empaquetado no debe tirar la app), y esa decisión necesita una alarma que la vigile.
+
+**Atribución.** Los datos son © colaboradores de OpenStreetMap, ODbL. Añadida a
+`DataSourcesView` junto a las demás fuentes.
+
+**Lo que esto NO arregla.** El acceso y el egreso —del portal a la primera parada y de la
+última al destino— siguen en línea recta, porque esos extremos son donde esté el usuario y no
+se pueden precalcular. Eso es B3.
+
+**Verificación.** 400 tests en 46 suites, verde. Nueve nuevos.
 
 ### B1 — Factores de detour asimétricos ✅
 

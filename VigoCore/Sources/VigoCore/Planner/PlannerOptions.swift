@@ -52,12 +52,19 @@ public struct PlannerOptions: Sendable, Hashable {
     /// a way in or out of the network. 800 m is the figure the handoff fixes.
     public var accessRadiusMetres: Double
 
-    /// How far a transfer on foot between two stops may be.
+    /// How far a transfer on foot between two stops may be, in **walked** metres.
     ///
     /// Much shorter than `accessRadiusMetres` on purpose: a 700 m walk is a reasonable way
     /// to start a journey, but as an intermediate transfer it is nearly always worse than
     /// staying on the bus. It also bounds the size of the footpath graph, which is
     /// quadratic in the radius.
+    ///
+    /// **Walked, not straight-line — the unit changed with B2.** It used to be a
+    /// straight-line radius of 300 m, which the detour factor then turned into roughly 405 m
+    /// of pavement. 400 keeps that reach while making the number mean the thing a passenger
+    /// experiences, and it is the figure `Tools/build_footpaths.py` generated
+    /// `footpaths.csv` with: raising it here without regenerating the table widens the
+    /// straight-line sweep but finds nothing new to put in it.
     public var maxTransferWalkMetres: Double
 
     // MARK: - Transfers
@@ -146,7 +153,7 @@ public struct PlannerOptions: Sendable, Hashable {
         accessDetourFactor: Double = 1.50,
         transferDetourFactor: Double = 1.35,
         accessRadiusMetres: Double = 800,
-        maxTransferWalkMetres: Double = 300,
+        maxTransferWalkMetres: Double = 400,
         minTransferSeconds: Int = 60,
         footpathBufferSeconds: Int = 30,
         maxRounds: Int = 4,

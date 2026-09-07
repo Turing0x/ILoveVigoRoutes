@@ -72,10 +72,13 @@ struct DataSourcesView: View {
                 link("Concello de Vigo — API de tiempo real",
                      "Endpoint no oficial usado por las apps municipales",
                      "https://datos.vigo.org")
+                link("OpenStreetMap — red peatonal de Vigo",
+                     "© colaboradores de OpenStreetMap, ODbL",
+                     "https://www.openstreetmap.org/copyright")
             } header: {
                 Text("Fuentes")
             } footer: {
-                Text("Los horarios y las llegadas proceden del Concello de Vigo. Esta app no está afiliada ni al Concello ni a Vitrasa.")
+                Text("Los horarios y las llegadas proceden del Concello de Vigo. Esta app no está afiliada ni al Concello ni a Vitrasa. Las distancias a pie entre paradas cercanas están medidas sobre el callejero de OpenStreetMap y viajan dentro de la app: no se consulta ningún servidor para calcularlas.")
             }
 
             Section {

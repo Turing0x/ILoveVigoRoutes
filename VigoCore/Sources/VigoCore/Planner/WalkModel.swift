@@ -113,22 +113,40 @@ public struct WalkModel: Sendable {
     /// as indices into `stops`.
     ///
     /// Sweeps in latitude order, so the scan for each stop stops as soon as the latitude
-    /// gap alone exceeds the radius. At 1149 stops and a 300 m radius this touches a
-    /// handful of neighbours each rather than the full 1.3 M pairs.
+    /// gap alone exceeds the radius. At 1154 stops this touches a handful of neighbours
+    /// each rather than the full 1.3 M pairs.
     ///
-    /// No transitive closure is computed, and that costs nothing: straight-line distance
-    /// obeys the triangle inequality, so a two-hop walk is never shorter than the direct
-    /// one. What the radius rules out is a transfer walk longer than the radius — which is
-    /// policy, not a lost optimum.
-    public func footpaths(stops: [Stop]) -> [Footpath] {
+    /// **`table` is consulted first and believed.** A measured street distance is not an
+    /// improvement on the straight-line estimate, it is a different kind of fact: the
+    /// estimate's error on short pairs is unbounded, because two poles five metres apart
+    /// across an uncrossable road are a five-second transfer by straight line and an
+    /// eighty-five-second one on the pavement. See `FootpathTable`.
+    ///
+    /// The sweep's radius is therefore a *candidate* filter, not the policy. A pair inside
+    /// it is admitted only if the table says the real walk is inside
+    /// `maxTransferWalkMetres` too — or, for a pair the table does not cover, if the
+    /// straight-line estimate is, which is the old behaviour and the fallback.
+    ///
+    /// No transitive closure is computed. For straight-line distances that costs nothing
+    /// (the triangle inequality guarantees a two-hop walk is never shorter). For street
+    /// distances it is no longer free in principle — a detour around a barrier can make
+    /// A→B→C shorter than A→C — but the generator routes on the real network, so its A→C is
+    /// already that detour. What the radius rules out is a transfer longer than the radius,
+    /// which is policy.
+    public func footpaths(stops: [Stop], table: FootpathTable = .empty) -> [Footpath] {
         let radius = options.maxTransferWalkMetres
         guard radius > 0, stops.count > 1 else { return [] }
 
-        let byLatitude = stops.indices.sorted { stops[$0].latitude < stops[$1].latitude }
-        // One degree of latitude is ~111.32 km everywhere; longitude is not, which is why
-        // the cheap test is on latitude and the exact one is haversine.
-        let latitudeSpan = radius / 111_320.0
+        // Wide enough to hold every pair whose *street* distance could still be inside the
+        // radius. Street distance is never shorter than the straight line, so a straight-line
+        // sweep at the radius itself would be sound — but the sweep is also what bounds the
+        // candidate set, and keeping it at the radius means a pair the table measures at
+        // 380 m is only considered if it also happens to be within 400 m as the crow flies.
+        // That is true for almost all of them and cheap to stop worrying about.
+        let sweepRadius = radius
+        let latitudeSpan = sweepRadius / 111_320.0
 
+        let byLatitude = stops.indices.sorted { stops[$0].latitude < stops[$1].latitude }
         var paths: [Footpath] = []
         for (position, index) in byLatitude.enumerated() {
             let origin = stops[index]
@@ -139,13 +157,32 @@ public struct WalkModel: Sendable {
                 if other.latitude - origin.latitude > latitudeSpan { break }
                 ahead += 1
 
-                let metres = TransitRepository.haversineMetres(
+                let straight = TransitRepository.haversineMetres(
                     origin.latitude, origin.longitude, other.latitude, other.longitude)
+                guard straight <= sweepRadius else { continue }
+
+                let metres: Double
+                if let measured = table.metres(from: origin.id, to: other.id) {
+                    metres = measured
+                } else if table.covers(origin.id) && table.covers(other.id) {
+                    // Both ends were measured and no route came back inside the generator's
+                    // radius. That is an answer — "you cannot walk this in a sensible time" —
+                    // and overriding it with a straight line would put back exactly the
+                    // phantom transfers this table exists to remove.
+                    continue
+                } else {
+                    // At least one stop is newer than the table. Estimate it rather than
+                    // strand it: a stop the feed just gained would otherwise have no
+                    // transfers at all until someone regenerates the resource.
+                    metres = straight * detourFactor(.transfer)
+                }
                 guard metres <= radius else { continue }
 
                 // `.transfer` is not a choice here: this function's whole output is the
-                // footpath graph, and every edge in it is a stop-to-stop transfer.
-                let cost = Int32(seconds(metres: metres, as: .transfer))
+                // footpath graph, and every edge in it is a stop-to-stop transfer. The
+                // metres are already walked metres by this point, whether they were measured
+                // or estimated, so the factor must not be applied a second time.
+                let cost = Int32(secondsForWalkedMetres(metres))
                 paths.append(Footpath(from: Int32(index), to: Int32(otherIndex),
                                       seconds: cost, metres: metres))
                 paths.append(Footpath(from: Int32(otherIndex), to: Int32(index),
@@ -153,5 +190,13 @@ public struct WalkModel: Sendable {
             }
         }
         return paths
+    }
+
+    /// Seconds for a distance that is **already** walked metres — measured on a street
+    /// network, or estimated and scaled once. No detour factor is applied: doing so would
+    /// double-count it, which is the one mistake this whole split makes easy to write.
+    public func secondsForWalkedMetres(_ metres: Double) -> Int {
+        guard metres > 0 else { return 0 }
+        return Int((metres / options.walkSpeedMetresPerSecond).rounded(.up))
     }
 }

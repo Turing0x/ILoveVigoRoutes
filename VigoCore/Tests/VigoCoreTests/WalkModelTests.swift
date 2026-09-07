@@ -122,6 +122,12 @@ struct WalkModelTests {
 
     /// The latitude sweep is an optimisation, and an optimisation that drops pairs would
     /// silently cost the planner transfers. Checked against the full quadratic scan.
+    ///
+    /// The reference applies the same admission rule the sweep does, and that rule is about
+    /// **walked** metres: with no measured table the estimate is straight-line times the
+    /// transfer factor, and it is that figure — not the straight line — that has to fit
+    /// inside `maxTransferWalkMetres`. Comparing against a straight-line radius would be
+    /// testing a policy the planner does not have.
     @Test("The latitude sweep finds every pair the brute-force scan finds")
     func sweepMatchesBruteForce() {
         // Fixed seed: a layout that exposes a gap in the sweep must keep exposing it.
@@ -141,7 +147,7 @@ struct WalkModelTests {
             for j in stops.indices where i != j {
                 let metres = TransitRepository.haversineMetres(
                     stops[i].latitude, stops[i].longitude, stops[j].latitude, stops[j].longitude)
-                if metres <= walk.options.maxTransferWalkMetres {
+                if metres * walk.detourFactor(.transfer) <= walk.options.maxTransferWalkMetres {
                     expected.insert([Int32(i), Int32(j)])
                 }
             }
@@ -150,6 +156,69 @@ struct WalkModelTests {
         let produced = Set(walk.footpaths(stops: stops).map { [$0.from, $0.to] })
         #expect(!expected.isEmpty, "the layout must actually produce some neighbours")
         #expect(produced == expected)
+    }
+
+    /// B2. The measured table is believed over the estimate, and the difference is not a
+    /// rounding one: two poles of the same avenue can be metres apart with no crossing
+    /// between them.
+    @Test("A measured pair overrides the straight-line estimate")
+    func measuredWins() {
+        let stops = [PlannerFixture.stop("A"), PlannerFixture.stop("B", eastMetres: 5)]
+        let table = FootpathTable(metres: [(stops[0].id, stops[1].id, 112)])
+
+        let estimated = walk.footpaths(stops: stops)
+        #expect(estimated.count == 2)
+        #expect(estimated[0].seconds <= 8, "five metres of straight line is nothing")
+
+        let measured = walk.footpaths(stops: stops, table: table)
+        #expect(measured.count == 2)
+        #expect(measured[0].metres == 112)
+        #expect(measured[0].seconds == walk.secondsForWalkedMetres(112))
+        #expect(measured[0].seconds > 60, "112 m of pavement is a minute and a half, not five seconds")
+    }
+
+    /// A covered pair the generator found no route for is a measurement, not a gap: putting
+    /// the straight-line estimate back would restore exactly the phantom transfers the
+    /// table exists to remove.
+    @Test("Two measured stops with no route get no footpath")
+    func measuredAbsenceIsAnAnswer() {
+        let a = PlannerFixture.stop("A")
+        let b = PlannerFixture.stop("B", eastMetres: 30)
+        let far = PlannerFixture.stop("FAR", northMetres: 5_000)
+        // Both A and B are covered — by their rows to `far` — but no A–B row exists.
+        let table = FootpathTable(metres: [(a.id, far.id, 900), (b.id, far.id, 900)])
+        #expect(walk.footpaths(stops: [a, b], table: table).isEmpty)
+    }
+
+    /// A stop the feed gained after the table was generated must not lose every transfer it
+    /// has. Absence of the *stop* is a gap; absence of a *pair* between covered stops is not.
+    @Test("A stop the table does not cover falls back to the estimate")
+    func uncoveredStopFallsBack() {
+        let a = PlannerFixture.stop("A")
+        let newcomer = PlannerFixture.stop("NEW", eastMetres: 40)
+        let far = PlannerFixture.stop("FAR", northMetres: 5_000)
+        let table = FootpathTable(metres: [(a.id, far.id, 900)])
+        #expect(!table.covers(newcomer.id))
+
+        let paths = walk.footpaths(stops: [a, newcomer], table: table)
+        #expect(paths.count == 2, "an unmeasured stop is estimated, not stranded")
+        #expect(paths[0].seconds == walk.seconds(metres: 40, as: .transfer))
+    }
+
+    /// The sweep filters candidates by straight-line distance while the policy is about
+    /// walked metres. That is only sound because a street walk is never shorter than the
+    /// straight line — so no measured pair inside the radius can fall outside the sweep.
+    @Test("The sweep never hides a measured pair that is inside the radius")
+    func sweepIsSoundForMeasuredPairs() {
+        let radius = walk.options.maxTransferWalkMetres
+        let a = PlannerFixture.stop("A")
+        // Straight-line distance just inside the radius, measured at the radius exactly:
+        // the tightest case the sweep has to admit.
+        let b = PlannerFixture.stop("B", northMetres: radius - 1)
+        let table = FootpathTable(metres: [(a.id, b.id, radius)])
+        let paths = walk.footpaths(stops: [a, b], table: table)
+        #expect(paths.count == 2)
+        #expect(paths[0].metres == radius)
     }
 
     @Test("A zero radius produces no footpaths")

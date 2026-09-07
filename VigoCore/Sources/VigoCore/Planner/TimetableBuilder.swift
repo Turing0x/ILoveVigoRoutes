@@ -16,10 +16,16 @@ public enum TimetableError: Error, Sendable, Equatable {
 public struct TimetableBuilder: Sendable {
     public let repository: TransitRepository
     public let options: PlannerOptions
+    /// Measured stop-to-stop walks. Defaults to the resource shipped with the package;
+    /// injectable so a test can build a timetable over hand-made geometry without the real
+    /// table's three thousand pairs quietly deciding the answer.
+    public let footpaths: FootpathTable
 
-    public init(repository: TransitRepository, options: PlannerOptions = PlannerOptions()) {
+    public init(repository: TransitRepository, options: PlannerOptions = PlannerOptions(),
+                footpaths: FootpathTable = .bundled) {
         self.repository = repository
         self.options = options
+        self.footpaths = footpaths
     }
 
     /// A trip as read from the database, before it is grouped into a pattern.
@@ -158,7 +164,7 @@ public struct TimetableBuilder: Sendable {
         // MARK: Footpaths
 
         var pathsByOrigin = [[(target: Int32, seconds: Int32)]](repeating: [], count: stops.count)
-        for path in WalkModel(options: options).footpaths(stops: stops) {
+        for path in WalkModel(options: options).footpaths(stops: stops, table: footpaths) {
             pathsByOrigin[Int(path.from)].append((path.to, path.seconds))
         }
         var footpathOffset: [Int32] = [0]

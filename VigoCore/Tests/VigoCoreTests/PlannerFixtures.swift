@@ -183,6 +183,11 @@ enum PlannerFixture {
 
     static func networkTimetable(options: PlannerOptions = PlannerOptions()) throws -> Timetable {
         let repository = TransitRepository(database: try networkDatabase())
-        return try TimetableBuilder(repository: repository, options: options).build(anchor: anchor)
+        // `.empty`, never `.bundled`. Fixture stops carry made-up ids, and a real id in
+        // `footpaths.csv` colliding with one of them would silently replace this geometry
+        // with a measured Vigo street — a test that passes or fails for reasons the test
+        // does not state.
+        return try TimetableBuilder(repository: repository, options: options,
+                                    footpaths: .empty).build(anchor: anchor)
     }
 }
