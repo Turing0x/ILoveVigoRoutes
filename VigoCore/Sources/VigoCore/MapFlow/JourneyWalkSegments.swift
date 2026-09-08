@@ -27,9 +27,11 @@ extension Journey {
     /// leg that was not a `.ride`, so the bus line floated with nothing joining it to the two
     /// endpoints — and a `walkOnly` journey, which has no ride at all, drew nothing whatsoever.
     ///
-    /// A leg whose two ends are the same point contributes nothing. That is the ordinary case
-    /// of an origin that *is* the boarding stop: the reconstruction still emits the access leg,
-    /// with zero seconds, and a line of zero length under the pin is noise, not information.
+    /// A leg whose two ends are the same point contributes nothing. `JourneyReconstruction`
+    /// no longer emits the access or egress leg at all when it is shorter than
+    /// `negligibleWalkSeconds`, so this mostly has nothing left to drop — but a `Journey` is
+    /// a plain value anything may build, and a line of zero length under the pin is noise,
+    /// not information, whoever produced it.
     public var walkSegments: [WalkSegment] {
         legs.compactMap { leg in
             guard case .walk(let from, let to, _, _) = leg else { return nil }

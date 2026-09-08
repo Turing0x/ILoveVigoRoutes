@@ -321,9 +321,13 @@ struct JourneyPlannerTests {
             Issue.record("expected .journeys with both the walk and the bus in it, got \(result.outcome)")
             return
         }
-        #expect(journeys.contains { $0.transfers == 0 && $0.legs.count == 3 },
-                "the bus alternative — walk in, ride, walk out — has to survive")
-        #expect(journeys.contains { $0.legs.count == 1 }, "and so does the direct walk")
+        // Por tramos y no por cuenta de tramos: el origen *es* la parada A y el destino *es*
+        // la parada B, así que las dos caminatas al aire libre son de cero segundos y
+        // `negligibleWalkSeconds` las deja fuera. La alternativa en autobús es el trayecto
+        // en autobús a secas, que tiene tantos tramos como la caminata directa.
+        #expect(journeys.contains { $0.transfers == 0 && !JourneySummary.isWalkOnly($0) },
+                "the bus alternative — here the ride alone — has to survive")
+        #expect(journeys.contains(where: JourneySummary.isWalkOnly), "and so does the direct walk")
     }
 
     @Test("A destination with no route and an unreasonable walk finds nothing")

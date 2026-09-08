@@ -192,6 +192,22 @@ public enum JourneyReconstruction {
         case walk(seconds: Int32)
     }
 
+    /// Below this, a walk to or from the door is not a leg — it is the same place.
+    ///
+    /// The access and egress candidates come from a radius around two points, and a stop
+    /// that *is* the destination still enters that radius with a second or two on it: the
+    /// straight-line distance is not exactly zero and `WalkModel` turns any positive metre
+    /// count into at least one second. Emitting that as a leg produced a visible "a pie
+    /// 1 s / 0 m" chip in the alternatives row and a zero-length dashed segment on the map,
+    /// which claim a stretch on foot that nobody walks.
+    ///
+    /// Fifteen seconds — about twenty metres at the model's pace — is below the resolution
+    /// of a GTFS stop position, so anything under it is inside the noise of where the stop
+    /// is said to be. The time itself is *not* discarded: `arrival` and `departure` below
+    /// still count `egressSeconds` and the access seconds in full, so dropping the leg
+    /// changes what is drawn and never when the traveller gets there.
+    static let negligibleWalkSeconds: Int32 = 15
+
     private static func reconstruct(
         timetable: Timetable, result: RaptorResult, round: Int,
         egressStop: Int, egressSeconds: Int32,
@@ -303,9 +319,13 @@ public enum JourneyReconstruction {
                 let firstBoardTime = timetable.departure(
                     pattern: firstBoard.pattern, trip: firstBoard.trip, position: firstBoard.boardPosition)
                 accessDeparture = firstBoardTime &- seconds
-                legs.append(.walk(from: origin, to: .stop(timetable.stops[step.stop]),
-                                  seconds: Int(seconds),
-                                  metres: walk.metres(forSeconds: Int(seconds), as: .accessEgress)))
+                // The departure is set either way: it is when the traveller has to set off,
+                // which the dropped seconds still belong to.
+                if seconds >= Self.negligibleWalkSeconds {
+                    legs.append(.walk(from: origin, to: .stop(timetable.stops[step.stop]),
+                                      seconds: Int(seconds),
+                                      metres: walk.metres(forSeconds: Int(seconds), as: .accessEgress)))
+                }
             case .walk(_, let seconds):
                 let source = chain[index - 1].stop
                 legs.append(.walk(from: .stop(timetable.stops[source]),
@@ -334,9 +354,16 @@ public enum JourneyReconstruction {
                     intermediateStops: intermediate))
             }
         }
-        legs.append(.walk(from: .stop(timetable.stops[egressStop]), to: destination,
-                          seconds: Int(egressSeconds),
-                          metres: walk.metres(forSeconds: Int(egressSeconds), as: .accessEgress)))
+        // Not emitted when the alighting stop *is* the destination. What is then left as the
+        // last leg is either the ride itself — no walk at the end, and
+        // `JourneyOrdering.egressWalkSeconds` reads zero, which is the truth — or the
+        // transfer walk that reached this stop, whose seconds become the final walk, which
+        // is also the truth: that walk does end at the door.
+        if egressSeconds >= Self.negligibleWalkSeconds {
+            legs.append(.walk(from: .stop(timetable.stops[egressStop]), to: destination,
+                              seconds: Int(egressSeconds),
+                              metres: walk.metres(forSeconds: Int(egressSeconds), as: .accessEgress)))
+        }
 
         let lastRide = rides[rides.count - 1]
         var networkArrival = timetable.arrival(pattern: lastRide.pattern, trip: lastRide.trip,

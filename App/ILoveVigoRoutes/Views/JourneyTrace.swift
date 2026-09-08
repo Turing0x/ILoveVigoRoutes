@@ -145,15 +145,18 @@ struct JourneyMapContent: MapContent {
                             style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [1, 9]))
             }
         }
-        // The chain always opens and closes with a walk leg — into the network from the
-        // real origin, and out of it to the real destination — so these two are always
-        // present, `walkOnly` included (there `legs.first == legs.last`).
-        if case .walk(let from, _, _, _) = journey.legs.first {
-            Marker("Origen", systemImage: "figure.walk.departure", coordinate: from.coordinate.clLocation)
+        // Where the journey begins and ends on the ground. Usually the two open-air walk
+        // legs — into the network from the real origin, out of it to the real destination,
+        // and for `walkOnly` the single leg is both. But `JourneyReconstruction` drops a
+        // walk of under `negligibleWalkSeconds`, because a stop that *is* the door is not a
+        // stretch on foot, so either end can be a ride instead; then the boarding or
+        // alighting stop is the endpoint, which is the same place to within a few metres.
+        if let origin = journey.endpointCoordinates?.origin {
+            Marker("Origen", systemImage: "figure.walk.departure", coordinate: origin.clLocation)
                 .tint(.blue)
         }
-        if case .walk(_, let to, _, _) = journey.legs.last {
-            Marker("Destino", systemImage: "flag.checkered", coordinate: to.coordinate.clLocation)
+        if let destination = journey.endpointCoordinates?.destination {
+            Marker("Destino", systemImage: "flag.checkered", coordinate: destination.clLocation)
                 .tint(.blue)
         }
         ForEach(Array(journey.legs.enumerated()), id: \.offset) { _, leg in

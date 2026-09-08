@@ -90,4 +90,26 @@ extension Journey {
             }
         }
     }
+
+    /// Where the journey starts and ends on the ground, or `nil` for a journey with no legs.
+    ///
+    /// The first and last leg used to be guaranteed walks — origin to a stop, a stop to the
+    /// destination — so the map read those two ends directly. They are not guaranteed any
+    /// more: `JourneyReconstruction` leaves out an access or egress walk shorter than
+    /// `negligibleWalkSeconds`, because a stop that *is* the door is not a stretch on foot.
+    /// When that happens the end of the journey is the boarding or alighting stop, which is
+    /// the same place to within the accuracy of the stop's own position.
+    public var endpointCoordinates: (origin: Coordinate, destination: Coordinate)? {
+        func end(of leg: JourneyLeg, takingStart: Bool) -> Coordinate {
+            switch leg {
+            case .walk(let from, let to, _, _):
+                takingStart ? from.coordinate : to.coordinate
+            case .ride(_, _, _, _, let board, let alight, _, _, _):
+                takingStart ? Coordinate(board) : Coordinate(alight)
+            }
+        }
+        guard let first = legs.first, let last = legs.last else { return nil }
+        return (origin: end(of: first, takingStart: true),
+                destination: end(of: last, takingStart: false))
+    }
 }

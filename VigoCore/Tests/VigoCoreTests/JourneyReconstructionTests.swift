@@ -33,8 +33,8 @@ struct JourneyReconstructionTests {
     @Test("A direct ride reconstructs into a walk, a ride, and a walk")
     func directRide() throws {
         let network = try Network()
-        let query = RaptorQuery(access: [StopWalk(stop: Int32(network.a), seconds: 0)],
-                                egress: [StopWalk(stop: Int32(network.c), seconds: 0)],
+        let query = RaptorQuery(access: [StopWalk(stop: Int32(network.a), seconds: 120)],
+                                egress: [StopWalk(stop: Int32(network.c), seconds: 90)],
                                 departure: T.at(7, 0), horizon: 3 * 3_600)
         let result = RaptorEngine().run(network.timetable, query)
         let journeys = JourneyReconstruction.alternatives(
@@ -50,7 +50,7 @@ struct JourneyReconstructionTests {
             Issue.record("expected the access walk first"); return
         }
         #expect(from == Self.origin)
-        #expect(inSeconds == 0)
+        #expect(inSeconds == 120)
 
         guard case .ride(let routeID, let shortName, _, _, let board, let alight,
                          let departure, let arrival, let intermediate) = journey.legs[1] else {
@@ -68,10 +68,64 @@ struct JourneyReconstructionTests {
             Issue.record("expected the egress walk last"); return
         }
         #expect(to == Self.destination)
-        #expect(outSeconds == 0)
+        #expect(outSeconds == 90)
 
-        #expect(network.timetable.axisSeconds(for: journey.departure) == Int(T.at(8, 0)))
-        #expect(network.timetable.axisSeconds(for: journey.arrival) == Int(T.at(8, 20)))
+        #expect(network.timetable.axisSeconds(for: journey.departure) == Int(T.at(7, 58)),
+                "the two minutes on foot come out of the traveller's own time")
+        #expect(network.timetable.axisSeconds(for: journey.arrival) == Int(T.at(8, 21, 30)))
+    }
+
+    /// El defecto que arregla `negligibleWalkSeconds`: cuando la parada de bajada *es* el
+    /// destino, el radio de egreso la sigue devolviendo con uno o dos segundos encima —
+    /// nunca exactamente cero— y la reconstrucción emitía con eso un tramo «a pie 1 s / 0 m».
+    /// En la fila de alternativas salía como un `legChip` más y en el mapa como un segmento
+    /// discontinuo de longitud cero.
+    @Test("Una parada de bajada que es el destino no deja tramo final a pie")
+    func negligibleEgressWalkIsNotALeg() throws {
+        let network = try Network()
+        let query = RaptorQuery(access: [StopWalk(stop: Int32(network.a), seconds: 120)],
+                                egress: [StopWalk(stop: Int32(network.c), seconds: 1)],
+                                departure: T.at(7, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine().run(network.timetable, query)
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: network.timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: PlannerOptions())
+
+        guard let journey = journeys.first else { Issue.record("expected a journey"); return }
+        #expect(journey.legs.count == 2, "walk in and the ride; nothing to walk at the far end")
+        guard case .ride = journey.legs[1] else {
+            Issue.record("the journey has to end on the vehicle"); return
+        }
+        // Lo que la ordenación y `WalkRefinement` leen del último tramo: cero, no un segundo.
+        #expect(JourneyOrdering.egressWalkSeconds(journey) == 0)
+        #expect(WalkRefinement.estimatedEgressSeconds(journey) == 0)
+        #expect(journey.walkingSeconds == 120, "solo el acceso")
+        // El segundo descartado sigue contando en la hora de llegada: se deja de dibujar,
+        // no de contar.
+        #expect(network.timetable.axisSeconds(for: journey.arrival) == Int(T.at(8, 20, 1)))
+    }
+
+    /// El caso simétrico, y el que las demás pruebas de este fichero ejercitan de paso: un
+    /// origen que ya está en la parada tampoco produce un tramo de acceso.
+    @Test("Un origen que ya está en la parada no deja tramo de acceso")
+    func negligibleAccessWalkIsNotALeg() throws {
+        let network = try Network()
+        let query = RaptorQuery(access: [StopWalk(stop: Int32(network.a), seconds: 0)],
+                                egress: [StopWalk(stop: Int32(network.c), seconds: 90)],
+                                departure: T.at(7, 0), horizon: 3 * 3_600)
+        let result = RaptorEngine().run(network.timetable, query)
+        let journeys = JourneyReconstruction.alternatives(
+            timetable: network.timetable, result: result, query: query,
+            origin: Self.origin, destination: Self.destination, options: PlannerOptions())
+
+        guard let journey = journeys.first else { Issue.record("expected a journey"); return }
+        #expect(journey.legs.count == 2, "the ride and the walk out")
+        guard case .ride = journey.legs[0] else {
+            Issue.record("the journey has to start on the vehicle"); return
+        }
+        #expect(WalkRefinement.estimatedAccessSeconds(journey) == 0)
+        #expect(network.timetable.axisSeconds(for: journey.departure) == Int(T.at(8, 0)),
+                "sin caminata, salir es subirse")
     }
 
     @Test("A same-stop transfer needs no walk leg between the two rides, and both rounds are offered")
@@ -89,10 +143,13 @@ struct JourneyReconstructionTests {
         #expect(journeys.map(\.transfers) == [1, 0], "sorted soonest arrival first")
 
         let changed = journeys[0]
-        #expect(changed.legs.count == 4, "walk in, two rides, walk out — no walk between them")
-        guard case .ride(_, let firstShort, _, _, _, let firstAlight, _, let firstArrival, _) = changed.legs[1],
+        // Dos tramos y no cuatro: los extremos van con caminata de cero segundos, que desde
+        // `negligibleWalkSeconds` deja de ser un tramo. Lo que este test mira es que entre
+        // los dos autobuses no aparezca ninguno.
+        #expect(changed.legs.count == 2, "two rides and nothing between them")
+        guard case .ride(_, let firstShort, _, _, _, let firstAlight, _, let firstArrival, _) = changed.legs[0],
               case .ride(_, let secondShort, _, _, let secondBoard, _, let secondDeparture, let secondArrival, _)
-                = changed.legs[2]
+                = changed.legs[1]
         else { Issue.record("expected two consecutive rides"); return }
         #expect(firstShort == "L1"); #expect(secondShort == "L5")
         #expect(firstAlight.id == secondBoard.id, "same stop, no footpath")
@@ -101,7 +158,7 @@ struct JourneyReconstructionTests {
         #expect(network.timetable.axisSeconds(for: secondArrival) == Int(T.at(8, 31)))
 
         let direct = journeys[1]
-        #expect(direct.legs.count == 3)
+        #expect(direct.legs.count == 1)
         #expect(network.timetable.axisSeconds(for: direct.arrival) == Int(T.at(9, 40)))
     }
 
@@ -118,10 +175,12 @@ struct JourneyReconstructionTests {
             origin: Self.origin, destination: Self.destination, options: options)
 
         guard let journey = journeys.first else { Issue.record("expected a journey"); return }
-        #expect(journey.legs.count == 5, "walk in, ride, walk transfer, ride, walk out")
-        guard case .ride(_, _, _, _, _, let firstAlight, _, _, _) = journey.legs[1],
-              case .walk(let from, let to, let seconds, let metres) = journey.legs[2],
-              case .ride(_, _, _, _, let secondBoard, _, _, _, _) = journey.legs[3]
+        // Tres y no cinco: los dos extremos son caminatas de cero segundos, que ya no son
+        // tramos. El del medio, que es el que este test mira, sí lo es.
+        #expect(journey.legs.count == 3, "ride, walk transfer, ride")
+        guard case .ride(_, _, _, _, _, let firstAlight, _, _, _) = journey.legs[0],
+              case .walk(let from, let to, let seconds, let metres) = journey.legs[1],
+              case .ride(_, _, _, _, let secondBoard, _, _, _, _) = journey.legs[2]
         else { Issue.record("expected ride, walk, ride"); return }
 
         #expect(firstAlight.id == StopID("1003"), "alights at C")
@@ -207,11 +266,11 @@ struct JourneyReconstructionTests {
             origin: Self.origin, destination: Self.destination, options: options)
 
         #expect(journeys.count == 1)
-        guard let journey = journeys.first, journey.legs.count == 4 else {
-            Issue.record("expected walk, ride, ride, walk"); return
+        guard let journey = journeys.first, journey.legs.count == 2 else {
+            Issue.record("expected two rides, with no walk at either end"); return
         }
-        guard case .ride(_, _, _, _, _, _, let firstDeparture, let firstArrival, _) = journey.legs[1],
-              case .ride(_, _, _, _, _, _, let secondDeparture, _, _) = journey.legs[2]
+        guard case .ride(_, _, _, _, _, _, let firstDeparture, let firstArrival, _) = journey.legs[0],
+              case .ride(_, _, _, _, _, _, let secondDeparture, _, _) = journey.legs[1]
         else { Issue.record("expected two rides"); return }
 
         #expect(timetable.axisSeconds(for: firstDeparture) == Int(T.at(8, 10)),
@@ -270,7 +329,7 @@ struct JourneyReconstructionTests {
 
         #expect(journeys.count == 1)
         guard let journey = journeys.first else { return }
-        #expect(journey.legs.count == 4, "walk in, ride, transfer walk, walk out")
+        #expect(journey.legs.count == 3, "ride, transfer walk, walk out — the access walk is zero")
         #expect(journey.arrival == timetable.date(forAxisSeconds: Int(T.at(9, 10)) + 120 + 60),
                 "the ride's own 09:10 plus the 120 s transfer walk its legs already show, plus the 60 s egress walk")
     }
@@ -334,15 +393,15 @@ struct JourneyReconstructionTests {
 
         #expect(journeys.count == 1)
         guard let journey = journeys.first else { return }
-        #expect(journey.legs.count == 4, "walk in, one ride, one transfer walk, one egress walk")
+        #expect(journey.legs.count == 3, "one ride, one transfer walk, one egress walk")
 
-        guard case .ride(_, let shortName, _, _, let board, _, _, _, _) = journey.legs[1] else {
+        guard case .ride(_, let shortName, _, _, let board, _, _, _, _) = journey.legs[0] else {
             Issue.record("expected a single ride"); return
         }
         #expect(shortName == "L2", "the ride that actually reaches S2, not L1 via the overwritten parent")
         #expect(board.id == StopID("RB4"), "boards where L2 boards — not S0, L1's stop")
 
-        guard case .walk(let from, let to, let seconds, _) = journey.legs[2] else {
+        guard case .walk(let from, let to, let seconds, _) = journey.legs[1] else {
             Issue.record("expected a single transfer walk"); return
         }
         guard case .stop(let fromStop) = from, case .stop(let toStop) = to else {
