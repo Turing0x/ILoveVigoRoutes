@@ -62,6 +62,19 @@ public enum PlanOutcomeMessage {
         case .noJourneyFound(let horizon):
             return notFound(horizon: horizon)
 
+        case .onboardRideUnresolvable(let failure):
+            switch failure {
+            case .patternGone(let line):
+                return """
+                    Los horarios se han actualizado y ya no encuentro ese recorrido de la \
+                    línea \(line). Vuelve a decirme en qué autobús vas.
+                    """
+            case .tripGone(let line):
+                return "No encuentro ningún servicio de la línea \(line) pasando por ahí ahora mismo."
+            case .rideFinished(let stop):
+                return "Este autobús termina en \(stop). Ya no queda trayecto por delante."
+            }
+
         case .noData:
             return "Todavía no se han importado los datos del Concello."
         }

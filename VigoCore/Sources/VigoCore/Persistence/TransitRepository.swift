@@ -898,6 +898,116 @@ public struct TransitRepository: Sendable {
         }
     }
 
+    // MARK: - Bus en marcha
+
+    public func onboardRide() throws -> OnboardRide? {
+        try database.writer.read { db in
+            guard let row = try OnboardRideRow.fetchOne(db, key: OnboardRideRow.currentID) else {
+                return nil
+            }
+            return try JSONDecoder().decode(OnboardRide.self, from: row.payload)
+        }
+    }
+
+    /// Declaring a bus ends any active journey, in the same transaction.
+    ///
+    /// The two states contradict each other: one says "I am following this plan to this
+    /// destination", the other "I am on some bus and have not decided where I am going". A
+    /// crash between two separate writes could leave both rows present and the capsule at the
+    /// bottom of the screen would have to choose between two truths.
+    public func startOnboardRide(_ ride: OnboardRide) throws {
+        let payload = try JSONEncoder().encode(ride)
+        try database.writer.write { db in
+            _ = try ActiveJourneyRow.deleteOne(db, key: ActiveJourneyRow.currentID)
+            try OnboardRideRow(ride, payload: payload).upsert(db)
+        }
+    }
+
+    /// Moves the stored ride forward. Rewrites the flat columns **and** re-encodes the payload
+    /// in the same write, so the two can never disagree about where the bus is — the failure
+    /// `extendActiveJourney`'s own doc comment exists to prevent.
+    public func updateOnboardRide(_ ride: OnboardRide) throws {
+        let payload = try JSONEncoder().encode(ride)
+        try database.writer.write { db in
+            guard try OnboardRideRow.exists(db, key: OnboardRideRow.currentID) else { return }
+            try OnboardRideRow(ride, payload: payload).update(db)
+        }
+    }
+
+    /// "Ya me he bajado", and also what a ride that has gone stale ends as. No history is
+    /// kept, the same product decision `endActiveJourney` records.
+    public func endOnboardRide() throws {
+        try database.writer.write { db in
+            _ = try OnboardRideRow.deleteOne(db, key: OnboardRideRow.currentID)
+        }
+    }
+
+    /// The traveller accepted one of the plans made from this ride: the bus stops being a
+    /// loose ride and becomes a journey with a destination. One transaction, for the same
+    /// reason `startOnboardRide` is one.
+    public func acceptOnboardRide(as snapshot: ActiveJourneySnapshot,
+                                  startedAt: Date = Date()) throws {
+        let payload = try JSONEncoder().encode(snapshot)
+        try database.writer.write { db in
+            _ = try OnboardRideRow.deleteOne(db, key: OnboardRideRow.currentID)
+            let row = ActiveJourneyRow(
+                id: ActiveJourneyRow.currentID, startedAt: startedAt, state: "active",
+                destinationName: snapshot.destination.name,
+                destinationStopID: snapshot.destination.stopID?.rawValue,
+                destinationLatitude: snapshot.destination.latitude,
+                destinationLongitude: snapshot.destination.longitude,
+                scheduledArrival: snapshot.scheduledArrival,
+                payload: payload)
+            try row.upsert(db)
+        }
+    }
+
+    // MARK: - Búsquedas recientes
+
+    public func recentSearches() throws -> [RecentSearch] {
+        try database.writer.read { db in
+            let rows = try RecentSearchRow.order(sql: "lastUsedAt DESC").fetchAll(db)
+            let stops = try Self.resolveStops(for: rows.compactMap(\.stopID), db: db)
+            return rows.map { Self.recentSearch(from: $0, stops: stops) }
+        }
+    }
+
+    /// Reselecting the same place updates `lastUsedAt` in place — `upsert` replaces every
+    /// column, `dedupKey` being the primary key — rather than inserting a second row.
+    public func recordRecentSearch(_ place: MapPlace, at now: Date = Date()) throws {
+        guard let candidate = RecentSearchKey.candidate(for: place) else { return }
+        try database.writer.write { db in
+            let row = RecentSearchRow(
+                dedupKey: candidate.dedupKey, name: place.label, subtitle: place.subtitle,
+                symbolName: place.symbolName, originKind: candidate.originKind,
+                stopID: place.stop?.id.rawValue,
+                latitude: place.coordinate.latitude, longitude: place.coordinate.longitude,
+                lastUsedAt: now)
+            try row.upsert(db)
+        }
+    }
+
+    public func deleteRecentSearch(dedupKey: String) throws {
+        try database.writer.write { db in
+            _ = try RecentSearchRow.deleteOne(db, key: dedupKey)
+        }
+    }
+
+    public func clearRecentSearches() throws {
+        try database.writer.write { db in
+            try db.execute(sql: "DELETE FROM recentSearch")
+        }
+    }
+
+    private static func recentSearch(from row: RecentSearchRow, stops: [String: Stop]) -> RecentSearch {
+        RecentSearch(
+            dedupKey: row.dedupKey, name: row.name, subtitle: row.subtitle,
+            symbolName: row.symbolName, originKind: row.originKind,
+            anchor: anchor(kind: row.originKind, stopID: row.stopID,
+                          latitude: row.latitude, longitude: row.longitude, stops: stops),
+            lastUsedAt: row.lastUsedAt)
+    }
+
     // MARK: - Saved place / journey row mapping
 
     private static func resolveStops(for stopIDs: [String], db: Database) throws -> [String: Stop] {

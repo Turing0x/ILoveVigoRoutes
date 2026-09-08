@@ -21,9 +21,11 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 9 — Horarios de una línea en una parada** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 10 — Criterio de ordenación de alternativas** | ✅ Hecha y comprobada en dispositivo |
 | **Fase 11 — Trayecto activo persistente** | ✅ Hecha. Pendiente de comprobación en dispositivo |
+| **Fase 12 — Búsquedas recientes** | ✅ Hecha, sin tope ni caducidad (decisión del propietario — ver más abajo). Pendiente de comprobación en dispositivo |
 | **Auditoría del buscador** | ✅ Tandas A–D hechas. Detalle en `AUDITORIA-BUSCADOR.md` |
 | **Auditoría del motor RAPTOR** | ✅ Tandas 1–4 hechas. Detalle en `AUDITORIA-RAPTOR.md` |
 | **Comparación con el motor del Concello** | ✅ Todos los puntos ejecutados. Detalle en `AUDITORIA-MOTOR-VS-CONCELLO.md` |
+| **Fase 14 — Bus en marcha («ya voy montado»)** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -2384,3 +2386,99 @@ frente a nuestros 7.
 4. **Comprobar en dispositivo.** Nada de esto se ha probado en un iPhone real: el interruptor
    de silla de ruedas, el aviso de horario estimado y el de «no llegas» son cambios de interfaz
    que sólo se validan usándolos.
+
+---
+
+## Fase 14 — Bus en marcha
+
+Plan en `~/.claude/plans/n1-n2-gps-l-nea-onboardride-aparte-harmonic-torvalds.md`. La situación
+que cubre: ya vas montado en un autobús y a mitad de trayecto se te ocurre un destino. Dos
+respuestas — **N1** «¿me sirve este mismo autobús, y dónde me bajo?» y **N2** «si no, ¿dónde me
+bajo y qué cojo después?».
+
+Lo que lo hacía imposible antes: `PlanQuery` tiene un origen peatonal, y planificar desde la
+ubicación trata al pasajero como si estuviera en la acera — ofrecería subir a otra línea en una
+parada por la que su propio autobús pasa de largo. El origen correcto es un vehículo en marcha.
+
+### Hecho
+
+- [x] **A — `relaxFootpaths` extraído** en `RaptorEngine.swift`. El salto de footpaths de cada
+  ronda, con su instantánea de `rideArrival`/`rideParent`, era el bloque más delicado del motor
+  y la siembra necesita exactamente ese mismo. Refactor puro, demostrado por las 200 tablas
+  aleatorias del oráculo.
+- [x] **B — `VigoCore/Sources/VigoCore/Onboard/`**: `OnboardRide` (huella del patrón por
+  secuencia de `StopID`, que es lo único que sobrevive a una reimportación), `OnboardOptions`,
+  `OnboardTripResolution` (línea declarada + GPS → patrón, viaje y posición; ambigüedad
+  explícita cuando los dos sentidos empatan), `OnboardRideResolution` (reencontrar la fila en
+  un horario reconstruido) y `OnboardProgress` (posición monótona; el retraso solo se recalcula
+  al pasar parada; `looksOffRide` en vez de adivinar).
+- [x] **C — Siembra en RAPTOR**: `RaptorQuery.onboard`, ronda 1 escrita a mano con
+  `ready = llegada + minTransferSeconds`, así el siguiente autobús ya cuenta como transbordo.
+  `BruteForceReference` implementa la misma regla por su cuenta y el barrido sembrado de 200
+  tablas la contrasta.
+- [x] **D — `JourneyReconstruction`**: `accessDeparture` para una cadena sin `.access` (si no,
+  toda salida caía en la medianoche del eje), pata 0 fijada frente al ajuste hacia atrás, y el
+  retraso aplicado a esa pata y solo a esa.
+- [x] **E — `planOnboard`**: una sola pasada (no hay «el siguiente autobús» cuando ya vas
+  dentro), respuesta directa fijada en cabeza para que `plausible`/`cut` no la tiren, sin
+  alternativa «anda desde aquí», y `OnboardWalkFallback` para bajarse y andar el resto —
+  eligiendo la parada que pone al pasajero en la puerta antes, no la que queda más cerca.
+  Caso nuevo `PlanOutcome.onboardRideUnresolvable` con su redacción en `PlanOutcomeMessage`.
+- [x] **F — Migración `v4`** con la tabla `onboardRide` y CRUD en `TransitRepository`.
+  Declarar un autobús termina el trayecto activo y aceptar un plan cierra el autobús suelto,
+  cada cosa en una transacción: los dos estados son excluyentes.
+- [x] **G/H/I/J — Interfaz**: `OnboardRideStore`, `OnboardRideBar` (una sola cápsula, nunca dos,
+  y siempre con la **edad** del último dato en vez de fingir seguimiento en vivo),
+  `OnboardDeclareSheet` (botón en el mapa, y atajo «Estoy en este bus» en una fila de llegada
+  de la ficha de parada, donde línea y parada son ciertas), `OnboardDestinationSheet` con
+  `OnboardJourneyRow`, y ascenso a trayecto activo con «Seguir este plan».
+
+**478 → 522 tests** en el núcleo (61 suites) y **22** en la app, verde. La app compila.
+
+### Diferencias con el plan, dichas en voz alta
+
+- Los resultados a bordo se pintan con una fila propia (`OnboardJourneyRow`) en lugar de
+  adaptar `JourneyRows`/`MapRouteSheet`: el flujo a bordo no pasa por esas vistas, y añadirles
+  un modo habría sido más riesgo para el mismo resultado. Como efecto, la cuenta atrás en vivo
+  del enlace (`FirstBoardingLive` apuntando a `nextBoarding`) **no está**: el enlace se muestra
+  con su hora de horario y el margen que queda.
+- Sin comprobar en dispositivo todavía, que es la regla permanente del proyecto.
+
+---
+
+## Fase 12 — Búsquedas recientes
+
+Nunca se había llegado a implementar: la tabla `recentSearch` llevaba desde la Fase 11 creada y
+vacía, sin ningún código que la leyera o escribiera. Implementada ahora a partir de
+`PLAN-FASES-8-13.md` §12, con un cambio deliberado sobre lo que allí se había decidido.
+
+**Diferencia con el plan: sin tope de 10 ni expulsión LRU.** El plan original limitaba la lista a
+10 filas, expulsando la de `lastUsedAt` más antiguo tras cada inserción. El propietario, al usar
+el buscador de verdad, pidió lo contrario: la lista crece sin límite y sin caducidad por tiempo,
+y el borrado es siempre manual — una fila con swipe, o todas de golpe con «Borrar recientes» al
+final de la sección. El resto del diseño (identidad, deduplicación, filtrado contra lo ya
+guardado, huérfanos) se mantiene tal y como está en el plan.
+
+- `VigoCore/Sources/VigoCore/Recents/`: `RecentSearch` (modelo, con `anchor: SavedPlaceAnchor`
+  resuelto igual que `SavedPlace`), `RecentSearchKey` (función pura: qué se recuerda y con qué
+  clave — excluye `.currentLocation`, `.savedPlace` y `.pointOfInterest`), `RecentSearchRecord`
+  (fila GRDB).
+- `TransitRepository`: `recentSearches()`, `recordRecentSearch(_:at:)` (upsert por `dedupKey`),
+  `deleteRecentSearch(dedupKey:)`, `clearRecentSearches()`. Sin recorte alguno.
+- `App/RecentSearchesStore.swift`: mismo patrón que `SavedPlacesStore`, en `AppEnvironment`,
+  recargado tras un reimport.
+- `MapSearchSheet.pick(_:)` registra el reciente en cada pick (el propio `RecentSearchKey`
+  descarta los que no cuentan). Sección «Recientes» primera del estado vacío, filtrada contra
+  favoritas y lugares guardados al leer; fila propia (no `stopRow`) con swipe para borrar una.
+- De paso, limpieza pedida por el propietario: **quitadas** «Cerca de ti» y «Líneas con
+  servicio» del estado vacío del buscador — en la práctica no las usaba, y añadían ruido.
+  `SearchSection.nearby`/`.lines` y el código que las alimentaba (`nearbyRow`, `linesSection`,
+  las dos consultas correspondientes) se retiraron de `MapSearchSheet` y de
+  `SearchLayoutBuilder.shortcuts`. La sección «Líneas» de los *resultados* (cuando la consulta
+  coincide con una línea) no se toca — es un caso distinto.
+
+**8 tests nuevos** en `RecentSearchTests.swift` (identidad, exclusiones, redondeo de
+coordenadas, plegado de nombre, upsert, borrado uno/todos, huérfano tras reimportación) y los de
+`SearchLayoutTests.swift` actualizados. **530 tests** en el núcleo, verde. La app compila.
+
+Sin comprobar en dispositivo todavía.

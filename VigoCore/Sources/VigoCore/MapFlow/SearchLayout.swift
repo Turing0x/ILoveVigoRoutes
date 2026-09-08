@@ -3,7 +3,7 @@ import Foundation
 /// A section `MapSearchSheet` can show. What each one contains stays the view's job; this
 /// only decides which appear, and in what order.
 public enum SearchSection: Sendable, Hashable {
-    case savedJourneys, savedPlaces, favourites, nearby, lines
+    case recents, savedJourneys, savedPlaces, favourites
     case stops, matchingLines, addresses
 }
 
@@ -40,24 +40,22 @@ public struct SearchLayout: Sendable, Hashable {
 /// Two entry points, one per state the sheet can be in — mirroring its own `shortcuts` and
 /// `searchResults` `@ViewBuilder`s exactly, so a change to one has an obvious home here.
 public enum SearchLayoutBuilder {
-    /// The empty-field state: trayectos, lugares, favoritas, cerca de ti, líneas.
+    /// The empty-field state: recientes, trayectos, lugares, favoritas.
     public static func shortcuts(
         showsSavedJourneys: Bool,
         hasData: Bool,
+        recents: Int,
         savedJourneys: Int,
         savedPlaces: Int,
-        favourites: Int,
-        nearby: Int,
-        lines: Int
+        favourites: Int
     ) -> SearchLayout {
         guard hasData else { return SearchLayout(sections: [], emptyState: .noFeed) }
 
         var sections: [SearchSection] = []
+        if recents > 0 { sections.append(.recents) }
         if showsSavedJourneys, savedJourneys > 0 { sections.append(.savedJourneys) }
         if savedPlaces > 0 { sections.append(.savedPlaces) }
         if favourites > 0 { sections.append(.favourites) }
-        if nearby > 0 { sections.append(.nearby) }
-        if lines > 0 { sections.append(.lines) }
 
         return SearchLayout(sections: sections, emptyState: sections.isEmpty ? .gettingStarted : .none)
     }

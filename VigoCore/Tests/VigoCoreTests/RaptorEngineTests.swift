@@ -539,4 +539,91 @@ struct RaptorEngineTests {
                     "a later round that arrives later would not be on the Pareto front")
         }
     }
+
+    // MARK: - A bordo
+
+    /// The L1 pattern A→B→C, and the index of one of its trips.
+    private func l1(_ network: Network, tripID: String) -> (pattern: Int, trip: Int) {
+        let timetable = network.timetable
+        let pattern = (0..<timetable.patternCount).first {
+            timetable.patternRouteShortName[$0] == "L1"
+                && Int(timetable.stopIndex(pattern: $0, position: 0)) == network.a
+        }!
+        let trip = (0..<timetable.tripCount(ofPattern: pattern)).first {
+            timetable.tripRef(pattern: pattern, trip: $0).tripID == TripID(tripID)
+        }!
+        return (pattern, trip)
+    }
+
+    @Test("A bordo, la ronda 1 es el propio autobús: cada parada que le queda queda etiquetada")
+    func onboardSeedsRoundOne() throws {
+        let network = try Network()
+        let (pattern, trip) = l1(network, tripID: "T1_0800")
+        let result = RaptorEngine().run(network.timetable, RaptorQuery(
+            access: [], egress: [StopWalk(stop: Int32(network.c), seconds: 0)],
+            departure: T.at(8, 5), horizon: 3 * 3_600,
+            onboard: OnboardSeed(pattern: Int32(pattern), trip: Int32(trip),
+                                 boardPosition: 0, delaySeconds: 0)))
+
+        #expect(result.roundsRun >= 1)
+        #expect(result.arrival(round: 1, stop: network.b) == T.at(8, 10))
+        #expect(result.arrival(round: 1, stop: network.c) == T.at(8, 20))
+        #expect(result.arrival(round: 0, stop: network.a) == nil,
+                "no hay ronda 0: nadie camina hasta la red, ya se va dentro de ella")
+
+        guard case .ride(_, _, let board, let alight)? =
+                result.parent(round: 1, stop: network.c) else {
+            Issue.record("se esperaba una pata montada hasta C"); return
+        }
+        #expect(board == 0)
+        #expect(alight == 2)
+    }
+
+    @Test("El transbordo tras bajarse cuenta como segundo vehículo, no como el primero")
+    func onboardTransferIsASecondVehicle() throws {
+        let network = try Network()
+        let (pattern, trip) = l1(network, tripID: "T1_0800")
+        let result = RaptorEngine().run(network.timetable, RaptorQuery(
+            access: [], egress: [StopWalk(stop: Int32(network.d), seconds: 0)],
+            departure: T.at(8, 5), horizon: 3 * 3_600,
+            onboard: OnboardSeed(pattern: Int32(pattern), trip: Int32(trip),
+                                 boardPosition: 0, delaySeconds: 0)))
+
+        // Bajarse del L1 en C a las 08:20 y coger el L5 de las 08:21 llega a D a las 08:31.
+        #expect(result.arrival(round: 1, stop: network.d) == nil,
+                "D no está en el recorrido de este autobús")
+        #expect(result.arrival(round: 2, stop: network.d) == T.at(8, 31))
+    }
+
+    @Test("El retraso observado desplaza este autobús y solo este autobús")
+    func onboardDelayShiftsOnlyTheSeededTrip() throws {
+        let network = try Network()
+        let (pattern, trip) = l1(network, tripID: "T1_0800")
+        let result = RaptorEngine().run(network.timetable, RaptorQuery(
+            access: [], egress: [StopWalk(stop: Int32(network.d), seconds: 0)],
+            departure: T.at(8, 5), horizon: 3 * 3_600,
+            onboard: OnboardSeed(pattern: Int32(pattern), trip: Int32(trip),
+                                 boardPosition: 0, delaySeconds: 120)))
+
+        #expect(result.arrival(round: 1, stop: network.c) == T.at(8, 22),
+                "dos minutos tarde en cada parada que le queda")
+        // El L5 de las 08:21 ya no se coge. El mejor enlace pasa a ser el L6, que sigue parado
+        // en C a las 08:30 y llega a D a las 08:40 — a su horario, no al de este autobús: el
+        // retraso de un vehículo no es el del otro.
+        #expect(result.arrival(round: 2, stop: network.d) == T.at(8, 40))
+    }
+
+    @Test("Sin paradas por delante, el resultado no afirma que se haya recorrido ninguna ronda")
+    func onboardAtTheTerminusRunsNoRound() throws {
+        let network = try Network()
+        let (pattern, trip) = l1(network, tripID: "T1_0800")
+        let last = Int32(network.timetable.stopCount(ofPattern: pattern) - 1)
+        let result = RaptorEngine().run(network.timetable, RaptorQuery(
+            access: [], egress: [StopWalk(stop: Int32(network.c), seconds: 0)],
+            departure: T.at(8, 25), horizon: 3 * 3_600,
+            onboard: OnboardSeed(pattern: Int32(pattern), trip: Int32(trip),
+                                 boardPosition: last, delaySeconds: 0)))
+
+        #expect(result.roundsRun == 0)
+    }
 }

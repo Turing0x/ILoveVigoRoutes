@@ -12,7 +12,11 @@ final class AppEnvironment {
     let repository: TransitRepository
     let favourites: FavouritesStore
     let savedPlaces: SavedPlacesStore
+    let recents: RecentSearchesStore
     let activeJourney: ActiveJourneyStore
+    /// The bus the traveller says they are on right now. Mutually exclusive with
+    /// `activeJourney`, enforced in the repository rather than here.
+    let onboardRide: OnboardRideStore
     let arrivals: ArrivalsService
     let feedService: GTFSFeedService
     let planner: JourneyPlanner
@@ -73,6 +77,7 @@ final class AppEnvironment {
         self.repository = repository
         self.favourites = FavouritesStore(repository: repository)
         self.savedPlaces = SavedPlacesStore(repository: repository)
+        self.recents = RecentSearchesStore(repository: repository)
         self.activeJourney = ActiveJourneyStore(repository: repository)
         let throttled = ThrottledRealtimeProvider(
             upstream: ConcelloRealtimeClient(), minimumInterval: 20)
@@ -83,6 +88,7 @@ final class AppEnvironment {
                                            database: db, repository: repository)
         let timetableStore = TimetableStore(repository: repository)
         self.timetableStore = timetableStore
+        self.onboardRide = OnboardRideStore(repository: repository, timetableStore: timetableStore)
         self.planner = JourneyPlanner(repository: repository, store: timetableStore)
         self.addressSearch = MapKitAddressSearchService()
         self.feedStatus = (try? repository.feedStatus()) ?? .empty
@@ -100,6 +106,15 @@ final class AppEnvironment {
         Task.detached(priority: .utility) {
             _ = try? await store.timetable(anchor: anchor)
         }
+    }
+
+    /// Today's `Timetable`, from the same cache the planner uses.
+    ///
+    /// The onboard mode needs the snapshot itself — to name the line the traveller is on, to
+    /// follow their position along its pattern — rather than an answer computed from it, and
+    /// `TimetableStore` is otherwise private to this class.
+    func timetable(for day: ServiceDate? = nil) async -> Timetable? {
+        try? await timetableStore.timetable(anchor: day ?? today)
     }
 
     var hasData: Bool { feedStatus.hasData }
@@ -134,12 +149,13 @@ final class AppEnvironment {
             if case .imported(let summary) = outcome { lastImportSummary = summary }
             feedStatus = (try? repository.feedStatus()) ?? feedStatus
             // A reimport rewrites `stop` wholesale: every `Stop` value cached in
-            // `favourites` and `savedPlaces` is stale until reloaded, and every `Timetable`
+            // `favourites`, `savedPlaces` and `recents` is stale until reloaded, and every `Timetable`
             // `TimetableStore` is holding describes a feed that no longer exists. Its cache
             // key already stops a stale snapshot from being served (`feedFingerprint`), so
             // this is only to free the memory now rather than waiting for eviction.
             favourites.reload()
             savedPlaces.reload()
+            recents.reload()
             await timetableStore.invalidateAll()
             return outcome
         } catch {

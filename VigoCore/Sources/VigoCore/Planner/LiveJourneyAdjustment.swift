@@ -85,7 +85,12 @@ public enum LiveJourneyAdjustment {
     /// `PlannerOptions` on purpose: the plan on screen is what the passenger is going to
     /// follow, and its own timings are what decide whether it still holds — not the policy
     /// minimums the search happened to use when it was built.
-    static func worstSlack(_ journey: Journey) -> TimeInterval? {
+    ///
+    /// `public` since the onboard mode, which needs it on its own. There, no delay has to be
+    /// applied on top: `planOnboard` already builds the first leg with the lateness the
+    /// traveller is actually experiencing, so the gap this returns is the real one and
+    /// applying `adjust` to it as well would count the same minutes twice.
+    public static func worstSlack(_ journey: Journey) -> TimeInterval? {
         var worst: TimeInterval?
         var lastAlight: Date?
         var walkBetween: TimeInterval = 0

@@ -11,6 +11,29 @@ public struct StopWalk: Sendable, Hashable {
     }
 }
 
+/// A vehicle the traveller is already riding when the search starts.
+///
+/// The journey does not begin on a pavement: it begins on a bus, from which the only way out
+/// is a stop the bus has not reached yet. Expressing that as a seed rather than as an access
+/// walk is what stops the planner from offering a boarding at a stop this bus drives past.
+public struct OnboardSeed: Sendable, Hashable {
+    public let pattern: Int32
+    /// Index of the trip **within the pattern**, as everywhere else in `Timetable`.
+    public let trip: Int32
+    /// Where the traveller is now. The seeded leg runs from here.
+    public let boardPosition: Int32
+    /// Added to this trip's scheduled times from `boardPosition` on. Signed, positive is late.
+    ///
+    /// Only this trip's: one vehicle carries one delay honestly, a connection does not
+    /// (`LiveJourneyAdjustment`).
+    public let delaySeconds: Int32
+
+    public init(pattern: Int32, trip: Int32, boardPosition: Int32, delaySeconds: Int32) {
+        self.pattern = pattern; self.trip = trip
+        self.boardPosition = boardPosition; self.delaySeconds = delaySeconds
+    }
+}
+
 public struct RaptorQuery: Sendable, Hashable {
     /// Where the journey can enter the network, already resolved to stop indices.
     public let access: [StopWalk]
@@ -22,9 +45,15 @@ public struct RaptorQuery: Sendable, Hashable {
     /// How far past `departure` an arrival may fall before it stops being interesting.
     public let horizon: Int32
 
-    public init(access: [StopWalk], egress: [StopWalk], departure: Int32, horizon: Int32) {
+    /// A bus already boarded, replacing the walk into the network. `access` must be empty
+    /// when this is set: there is no walk in, because the traveller is already inside.
+    public let onboard: OnboardSeed?
+
+    public init(access: [StopWalk], egress: [StopWalk], departure: Int32, horizon: Int32,
+                onboard: OnboardSeed? = nil) {
         self.access = access; self.egress = egress
         self.departure = departure; self.horizon = horizon
+        self.onboard = onboard
     }
 }
 
@@ -150,7 +179,54 @@ public struct RaptorEngine: Sendable {
 
         var roundsRun = 0
 
-        for round in 1...rounds {
+        // MARK: Round 1, seeded — the bus the traveller is already on
+        //
+        // Written outside the round loop because there is nothing for round 1 to *find*: the
+        // vehicle is not chosen, it is given. Every stop the trip has left is labelled at its
+        // own scheduled time (plus the observed delay), which is what an ordinary round 1
+        // would have produced had the traveller boarded it — so rounds 2 onwards need no
+        // knowledge of any of this and behave exactly as they always did.
+        //
+        // Two consequences worth stating so they are not later "fixed":
+        //
+        // - Nothing else can be boarded in round 1, because round 0 marked nothing. That is
+        //   correct: round 1 *is* this bus.
+        // - `ready` gets the transfer slack that round 0's access deliberately does not, so
+        //   the next boarding counts as a transfer — which is what it is.
+        if let seed = query.onboard {
+            precondition(query.access.isEmpty,
+                         "an onboard seed replaces the access walk; both cannot be given")
+            let base = stopCount
+            let pattern = Int(seed.pattern)
+            let trip = Int(seed.trip)
+            var riddenStops: [Int] = []
+            for position in (Int(seed.boardPosition) + 1)..<timetable.stopCount(ofPattern: pattern) {
+                let stop = Int(timetable.stopIndex(pattern: pattern, position: position))
+                let arrives = timetable.arrival(pattern: pattern, trip: trip, position: position)
+                    &+ seed.delaySeconds
+                guard arrives < min(bestArrival[stop], targetBest) else { continue }
+                arrival[base + stop] = arrives
+                bestArrival[stop] = arrives
+                ready[base + stop] = arrives &+ minTransfer
+                parent[base + stop] = .ride(
+                    pattern: seed.pattern, trip: seed.trip,
+                    boardPosition: seed.boardPosition, alightPosition: Int32(position))
+                if !marked[stop] { marked[stop] = true; riddenStops.append(stop) }
+            }
+            relaxFootpaths(timetable, base: base, riddenStops: riddenStops,
+                           targetBest: targetBest, footpathBuffer: footpathBuffer,
+                           arrival: &arrival, bestArrival: &bestArrival, ready: &ready,
+                           parent: &parent, rideParent: &rideParent, marked: &marked)
+            // Set by hand because the loop below never runs round 1 on this path, and
+            // `JourneyReconstruction` refuses a result that claims no round ran.
+            roundsRun = marked.contains(true) ? 1 : 0
+        }
+
+        // A seeded query has already had its round 1; `stride` yields nothing when the round
+        // budget was spent on it, which is the honest reading of `maxRounds == 1` plus a bus
+        // already boarded.
+        let firstRound = query.onboard == nil ? 1 : 2
+        for round in stride(from: firstRound, through: rounds, by: 1) {
             let base = round * stopCount
             let previous = (round - 1) * stopCount
 
@@ -232,46 +308,10 @@ public struct RaptorEngine: Sendable {
             }
 
             // MARK: 4 — one walk per round, from the stops just alighted at
-            //
-            // Not iterated to a fixed point on purpose: straight-line footpaths obey the
-            // triangle inequality, so chaining them can never beat the direct walk, and
-            // capping it at one hop keeps a transfer from silently becoming a 900 m hike.
-            //
-            // The ride arrivals — and their parents — are snapshotted before this loop
-            // writes anything: a walk into stop X can land before X's own turn as a source
-            // comes up (X is in `riddenStops` too, just later in the list), and reading
-            // `arrival[base + X]` live at that point would pick up the walk's result
-            // instead of the ride's — turning "one hop" into two chained ones without
-            // either loop noticing.
-            //
-            // The parent needs the same snapshot as the value, not just the value: once a
-            // walk into X rewrites `parent[base + X]` to `.walk(from: ...)`, a later
-            // outgoing walk that reads `rideArrival[X]` (X's ride, correctly) would still
-            // chain onto X's now-overwritten `.walk` parent when the chain is later walked
-            // backwards — two footpaths presented as one. `rideParent` is what
-            // `JourneyReconstruction` follows instead, for exactly the stops this loop
-            // uses as a walk source.
-            var rideArrival: [Int: Int32] = [:]
-            rideArrival.reserveCapacity(riddenStops.count)
-            for stop in riddenStops {
-                rideArrival[stop] = arrival[base + stop]
-                rideParent[base + stop] = parent[base + stop]
-            }
-
-            for stop in riddenStops {
-                let from = rideArrival[stop]!
-                for slot in timetable.footpaths(fromStop: stop) {
-                    let target = Int(timetable.footpathTarget[slot])
-                    let seconds = timetable.footpathSeconds[slot]
-                    let candidate = from &+ seconds
-                    guard candidate < min(bestArrival[target], targetBest) else { continue }
-                    arrival[base + target] = candidate
-                    bestArrival[target] = candidate
-                    ready[base + target] = candidate &+ footpathBuffer
-                    parent[base + target] = .walk(from: Int32(stop), seconds: seconds)
-                    marked[target] = true
-                }
-            }
+            relaxFootpaths(timetable, base: base, riddenStops: riddenStops,
+                           targetBest: targetBest, footpathBuffer: footpathBuffer,
+                           arrival: &arrival, bestArrival: &bestArrival, ready: &ready,
+                           parent: &parent, rideParent: &rideParent, marked: &marked)
 
             // MARK: 5
             if !marked.contains(true) { break }
@@ -281,6 +321,59 @@ public struct RaptorEngine: Sendable {
         return RaptorResult(stopCount: stopCount, roundsRun: roundsRun,
                             arrival: arrival, parent: parent, bestArrival: bestArrival,
                             rideParent: rideParent)
+    }
+
+    /// The single footpath hop a round is allowed, from the stops that round alighted at.
+    ///
+    /// Not iterated to a fixed point on purpose: straight-line footpaths obey the triangle
+    /// inequality, so chaining them can never beat the direct walk, and capping it at one hop
+    /// keeps a transfer from silently becoming a 900 m hike.
+    ///
+    /// The ride arrivals — and their parents — are snapshotted before the second loop writes
+    /// anything: a walk into stop X can land before X's own turn as a source comes up (X is in
+    /// `riddenStops` too, just later in the list), and reading `arrival[base + X]` live at that
+    /// point would pick up the walk's result instead of the ride's — turning "one hop" into two
+    /// chained ones without either loop noticing.
+    ///
+    /// The parent needs the same snapshot as the value, not just the value: once a walk into X
+    /// rewrites `parent[base + X]` to `.walk(from: ...)`, a later outgoing walk that reads
+    /// `rideArrival[X]` (X's ride, correctly) would still chain onto X's now-overwritten
+    /// `.walk` parent when the chain is later walked backwards — two footpaths presented as
+    /// one. `rideParent` is what `JourneyReconstruction` follows instead, for exactly the stops
+    /// this loop uses as a walk source.
+    ///
+    /// A method rather than the loop body it was extracted from because the onboard seed
+    /// (`RaptorQuery.onboard`) writes a round-1 slice of its own outside the round loop and
+    /// needs exactly this hop afterwards. Two copies of this reasoning would drift apart the
+    /// way two copies of `PlanOutcome`'s wording once did.
+    private func relaxFootpaths(
+        _ timetable: Timetable, base: Int, riddenStops: [Int],
+        targetBest: Int32, footpathBuffer: Int32,
+        arrival: inout [Int32], bestArrival: inout [Int32], ready: inout [Int32],
+        parent: inout [RaptorParent?], rideParent: inout [RaptorParent?],
+        marked: inout [Bool]
+    ) {
+        var rideArrival: [Int: Int32] = [:]
+        rideArrival.reserveCapacity(riddenStops.count)
+        for stop in riddenStops {
+            rideArrival[stop] = arrival[base + stop]
+            rideParent[base + stop] = parent[base + stop]
+        }
+
+        for stop in riddenStops {
+            let from = rideArrival[stop]!
+            for slot in timetable.footpaths(fromStop: stop) {
+                let target = Int(timetable.footpathTarget[slot])
+                let seconds = timetable.footpathSeconds[slot]
+                let candidate = from &+ seconds
+                guard candidate < min(bestArrival[target], targetBest) else { continue }
+                arrival[base + target] = candidate
+                bestArrival[target] = candidate
+                ready[base + target] = candidate &+ footpathBuffer
+                parent[base + target] = .walk(from: Int32(stop), seconds: seconds)
+                marked[target] = true
+            }
+        }
     }
 
     /// First trip of `pattern` departing `position` at or after `notBefore`, searched in

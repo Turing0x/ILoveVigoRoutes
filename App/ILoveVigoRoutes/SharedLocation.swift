@@ -71,3 +71,12 @@ final class SharedLocation {
                                                     : kCLLocationAccuracyHundredMeters)
     }
 }
+
+extension Coordinate {
+    /// CoreLocation's own type is not `Equatable`, so `onChange` cannot watch it directly — the
+    /// codebase converts to `VigoCore.Coordinate` for that, and this is the conversion, in one
+    /// place rather than spelled out at each call site.
+    static func from(_ coordinate: CLLocationCoordinate2D) -> Coordinate {
+        Coordinate(latitude: coordinate.latitude, longitude: coordinate.longitude)
+    }
+}

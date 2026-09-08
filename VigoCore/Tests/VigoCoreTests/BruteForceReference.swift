@@ -55,7 +55,47 @@ enum BruteForceReference {
 
         var roundsRun = 0
 
-        for round in 1...rounds {
+        // The onboard rule, written from the definition rather than from the engine's code:
+        // round 1 is exactly "every stop this trip has left, at the time it calls there",
+        // boardable afterwards with the ordinary transfer slack, plus the one footpath hop
+        // every round gets.
+        if let seed = query.onboard {
+            let base = stopCount
+            let pattern = Int(seed.pattern)
+            let trip = Int(seed.trip)
+            var rideMarked = [Bool](repeating: false, count: stopCount)
+            var anyMarked = false
+            for position in (Int(seed.boardPosition) + 1)..<timetable.stopCount(ofPattern: pattern) {
+                let stop = Int(timetable.stopIndex(pattern: pattern, position: position))
+                let arrives = timetable.arrival(pattern: pattern, trip: trip, position: position)
+                    &+ seed.delaySeconds
+                guard arrives < min(bestArrival[stop], targetBest) else { continue }
+                bestArrival[stop] = arrives
+                arrival[base + stop] = arrives
+                ready[base + stop] = arrives &+ minTransfer
+                rideMarked[stop] = true
+                anyMarked = true
+            }
+
+            var rideArrival: [Int: Int32] = [:]
+            for stop in 0..<stopCount where rideMarked[stop] { rideArrival[stop] = arrival[base + stop] }
+            for stop in 0..<stopCount where rideMarked[stop] {
+                let from = rideArrival[stop]!
+                for slot in timetable.footpaths(fromStop: stop) {
+                    let target = Int(timetable.footpathTarget[slot])
+                    let seconds = timetable.footpathSeconds[slot]
+                    let candidate = from &+ seconds
+                    guard candidate < min(bestArrival[target], targetBest) else { continue }
+                    bestArrival[target] = candidate
+                    arrival[base + target] = candidate
+                    ready[base + target] = candidate &+ footpathBuffer
+                    anyMarked = true
+                }
+            }
+            roundsRun = anyMarked ? 1 : 0
+        }
+
+        for round in stride(from: query.onboard == nil ? 1 : 2, through: rounds, by: 1) {
             let base = round * stopCount
             let previous = (round - 1) * stopCount
             var rideMarked = [Bool](repeating: false, count: stopCount)
@@ -270,5 +310,24 @@ enum RandomPlannerFixture {
         let query = RaptorQuery(access: Array(access), egress: Array(egress),
                                 departure: departure, horizon: horizon)
         return (timetable, query, options)
+    }
+
+    /// The same instance asked as an onboard question: no access walk, a random trip of a
+    /// random pattern already boarded at a random position, running a random amount late.
+    ///
+    /// The egress, departure and horizon are kept exactly as generated, so the seeded sweep
+    /// exercises the same pruning bounds as the unseeded one.
+    static func onboard(_ query: RaptorQuery, timetable: Timetable,
+                        rng: inout SeededGenerator) -> RaptorQuery {
+        let pattern = Int.random(in: 0..<timetable.patternCount, using: &rng)
+        let trip = Int.random(in: 0..<timetable.tripCount(ofPattern: pattern), using: &rng)
+        let boardPosition = Int.random(in: 0..<(timetable.stopCount(ofPattern: pattern) - 1),
+                                       using: &rng)
+        let delay = Int32.random(in: -300...600, using: &rng)
+        return RaptorQuery(
+            access: [], egress: query.egress, departure: query.departure,
+            horizon: query.horizon,
+            onboard: OnboardSeed(pattern: Int32(pattern), trip: Int32(trip),
+                                 boardPosition: Int32(boardPosition), delaySeconds: delay))
     }
 }

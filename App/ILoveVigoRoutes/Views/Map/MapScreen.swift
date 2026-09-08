@@ -45,6 +45,8 @@ struct MapScreen: View {
     /// `LongPressGesture` cannot report a location on its own; this is the recipe the Fase 5
     /// spike confirmed on device, panning and zooming intact.
     @State private var lastTouch: CGPoint = .zero
+    /// Whether the "¿en qué autobús vas?" sheet is up.
+    @State private var declaringRide = false
 
     /// `CLLocationCoordinate2D` is not `Equatable`, so `onChange` cannot watch it directly.
     /// `Coordinate` is, and it is the type the rest of the flow speaks anyway.
@@ -245,6 +247,7 @@ struct MapScreen: View {
             .onChange(of: model.state.selectedAlternative) { _, _ in
                 frame(journeys: model.drawn.journeys, traces: model.drawn.traces)
             }
+            .sheet(isPresented: $declaringRide) { OnboardDeclareSheet() }
             .overlay(alignment: .top) { hint(model) }
             .overlay(alignment: .topTrailing) { controls(model) }
             .overlay(alignment: .bottom) { followingBanner(model) }
@@ -513,6 +516,23 @@ struct MapScreen: View {
                     .background(.regularMaterial, in: Circle())
             }
             .accessibilityLabel("Capas del mapa")
+
+            // Declaring a bus lives here rather than in a sheet somebody has to find: the
+            // moment it is useful is the moment somebody is sitting on a bus with the map
+            // open. It disappears while a ride is declared — the capsule at the bottom is
+            // then the way in.
+            if environment.onboardRide.ride == nil {
+                Button {
+                    declaringRide = true
+                } label: {
+                    Image(systemName: "bus.fill")
+                        .font(.title3)
+                        .frame(width: 24, height: 24)
+                        .padding(9)
+                        .background(.regularMaterial, in: Circle())
+                }
+                .accessibilityLabel("Voy en un autobús")
+            }
         }
         .padding(.trailing, 10)
         .padding(.top, 10)
