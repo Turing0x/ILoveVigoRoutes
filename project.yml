@@ -18,7 +18,12 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    DEVELOPMENT_TEAM: ""
+    # Equipo de firma. Verificado contra el perfil incrustado en un build de dispositivo
+    # (`security cms -D -i .../embedded.mobileprovision`), no leído del nombre del
+    # certificado: en un "Apple Development: Nombre (XXXXXXXXXX)" el paréntesis es el
+    # identificador del certificado y no el del equipo, y confundirlos manda a firmar con
+    # un equipo que no tiene el dispositivo provisionado.
+    DEVELOPMENT_TEAM: M2J9PP4RR8
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
