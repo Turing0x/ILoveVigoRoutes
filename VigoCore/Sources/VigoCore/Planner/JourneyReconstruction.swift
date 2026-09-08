@@ -30,7 +30,8 @@ public enum JourneyReconstruction {
             reconstruct(
                 timetable: timetable, result: result, round: candidate.round,
                 egressStop: candidate.stop, egressSeconds: candidate.seconds,
-                origin: origin, destination: destination, options: options, walk: walk)
+                origin: origin, destination: destination, options: options, walk: walk,
+                onboard: query.onboard)
         }
 
         // The chain that already existed: one journey per round that improved the arrival,
@@ -208,10 +209,16 @@ public enum JourneyReconstruction {
     /// changes what is drawn and never when the traveller gets there.
     static let negligibleWalkSeconds: Int32 = 15
 
+    /// - Parameter onboard: the bus the traveller was already on when the search started, if
+    ///   any. Everything it changes is guarded on it being non-`nil`, so an ordinary journey
+    ///   is rebuilt exactly as before: this leg has no access walk in front of it, its vehicle
+    ///   is fixed rather than fitted, and its times carry the delay the traveller is
+    ///   already experiencing.
     private static func reconstruct(
         timetable: Timetable, result: RaptorResult, round: Int,
         egressStop: Int, egressSeconds: Int32,
-        origin: Place, destination: Place, options: PlannerOptions, walk: WalkModel
+        origin: Place, destination: Place, options: PlannerOptions, walk: WalkModel,
+        onboard: OnboardSeed? = nil
     ) -> Journey? {
         // MARK: walk the parents back to the access leg
         //
@@ -279,7 +286,12 @@ public enum JourneyReconstruction {
         var limit = timetable.arrival(pattern: rides[rides.count - 1].pattern,
                                       trip: rides[rides.count - 1].trip,
                                       position: rides[rides.count - 1].alightPosition)
-        for index in stride(from: rides.count - 1, through: 0, by: -1) {
+        // Ride 0 is pinned when the traveller is already on it: the fit exists to catch the
+        // *latest* vehicle that still works, and there is no choosing a later one of a bus you
+        // are sitting in. Rides 1 and up keep the full fit, which is what makes "get off here,
+        // and the connection you take is the last one that still meets it" correct.
+        let firstFittable = onboard == nil ? 0 : 1
+        for index in stride(from: rides.count - 1, through: firstFittable, by: -1) {
             let ride = rides[index]
             // `latestTrip` cannot actually return `nil` here (H-14): `ride.trip` itself
             // already satisfies `arrival(..., ride.trip, ...) <= limit` — it is either the
@@ -311,7 +323,23 @@ public enum JourneyReconstruction {
         // MARK: assemble legs, forward, using the fitted trips
         var legs: [JourneyLeg] = []
         var rideIndex = 0
+        // Set by the `.access` case below — except for a seeded chain, which has no access
+        // step at all: its first parent is the ride itself, and leaving this at zero would
+        // date every onboard journey to the timetable's anchor midnight. The departure of an
+        // onboard journey is the moment the traveller is at, on this bus.
         var accessDeparture: Int32 = 0
+        if let onboard {
+            accessDeparture = timetable.departure(pattern: rides[0].pattern, trip: rides[0].trip,
+                                                  position: rides[0].boardPosition)
+                &+ onboard.delaySeconds
+        }
+        /// The delay the traveller is already carrying, for the ride they are already on and
+        /// for no other. Past the alighting a connection runs to its own timetable — a delay
+        /// there is not "later" but unknown, the distinction `LiveJourneyAdjustment` makes.
+        func delay(forRide index: Int) -> Int32 {
+            guard let onboard, index == 0 else { return 0 }
+            return onboard.delaySeconds
+        }
         for (index, step) in chain.enumerated() {
             switch step.parent {
             case .access(let seconds):
@@ -334,8 +362,14 @@ public enum JourneyReconstruction {
                                   metres: walk.metres(forSeconds: Int(seconds), as: .transfer)))
             case .ride:
                 let ride = rides[rideIndex]
+                let rideDelay = delay(forRide: rideIndex)
                 rideIndex += 1
-                let boardStop = chain[index - 1].stop
+                // A seeded first ride has no step in front of it to read the boarding stop
+                // from: the traveller boarded before the search began, and where they are now
+                // is the pattern position the seed named.
+                let boardStop = index == 0
+                    ? Int(timetable.stopIndex(pattern: ride.pattern, position: ride.boardPosition))
+                    : chain[index - 1].stop
                 let tripRef = timetable.tripRef(pattern: ride.pattern, trip: ride.trip)
                 let departSeconds = timetable.departure(pattern: ride.pattern, trip: ride.trip,
                                                         position: ride.boardPosition)
@@ -349,8 +383,8 @@ public enum JourneyReconstruction {
                     routeShortName: timetable.patternRouteShortName[ride.pattern],
                     headsign: tripRef.headsign, tripID: tripRef.tripID,
                     board: timetable.stops[boardStop], alight: timetable.stops[step.stop],
-                    departure: timetable.date(forAxisSeconds: Int(departSeconds)),
-                    arrival: timetable.date(forAxisSeconds: Int(arriveSeconds)),
+                    departure: timetable.date(forAxisSeconds: Int(departSeconds &+ rideDelay)),
+                    arrival: timetable.date(forAxisSeconds: Int(arriveSeconds &+ rideDelay)),
                     intermediateStops: intermediate))
             }
         }
@@ -368,6 +402,7 @@ public enum JourneyReconstruction {
         let lastRide = rides[rides.count - 1]
         var networkArrival = timetable.arrival(pattern: lastRide.pattern, trip: lastRide.trip,
                                                position: lastRide.alightPosition)
+            &+ delay(forRide: rides.count - 1)
         // The chain can end with a transfer walk when the chosen egress stop is one hop
         // from where the last vehicle actually lets the passenger off — `egressStop` and
         // the last ride's own alighting stop are not always the same stop. Every walking

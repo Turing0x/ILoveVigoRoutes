@@ -221,6 +221,33 @@ public final class AppDatabase: Sendable {
             try db.create(index: "recentSearch_lastUsedAt", on: "recentSearch", columns: ["lastUsedAt"])
         }
 
+        migrator.registerMigration("v4") { db in
+            // The bus the traveller says they are riding right now. A separate table from
+            // `activeJourney` because it is a separate thing: that one is a plan being
+            // followed and is never replanned, this one is a vehicle with no destination
+            // attached yet, whose whole point is that a destination may turn up mid-ride.
+            // The app keeps at most one of the two, which is a rule about behaviour, not a
+            // constraint the schema can express.
+            try db.create(table: "onboardRide") { t in
+                t.primaryKey("id", .text)                       // constant "current"
+                t.column("declaredAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+                t.column("routeShortName", .text).notNull()
+                t.column("normalizedLine", .text).notNull()
+                t.column("headsign", .text)
+                // No FK to `trip` or `stop`, same reasoning as `savedPlace` and
+                // `activeJourney`: the importer clears and rewrites both wholesale.
+                t.column("tripID", .text)
+                t.column("currentStopID", .text)
+                t.column("currentStopName", .text).notNull()
+                t.column("currentLatitude", .double).notNull()
+                t.column("currentLongitude", .double).notNull()
+                t.column("currentPosition", .integer).notNull()
+                t.column("observedDelaySeconds", .integer).notNull().defaults(to: 0)
+                t.column("payload", .blob).notNull()            // JSON of OnboardRide
+            }
+        }
+
         return migrator
     }
 }

@@ -71,6 +71,16 @@ final class StopDetailModel {
 struct StopDetailView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var model: StopDetailModel
+    /// The line the traveller says they are on, while the declaration sheet is up.
+    ///
+    /// A wrapper rather than a bare `String?` because `sheet(item:)` needs `Identifiable`, and
+    /// a line name is not one — two arrivals of the same line share it.
+    @State private var declaringLine: DeclaredLine?
+
+    struct DeclaredLine: Identifiable {
+        let name: String
+        var id: String { name }
+    }
 
     init(stop: Stop, environment: AppEnvironment) {
         _model = State(initialValue: StopDetailModel(stop: stop, environment: environment))
@@ -104,6 +114,9 @@ struct StopDetailView: View {
         .refreshable { await model.load(forceNetwork: true) }
         .task { model.startAutoRefresh() }
         .onDisappear { model.stopAutoRefresh() }
+        .sheet(item: $declaringLine) { line in
+            OnboardDeclareSheet(presetLine: line.name, presetStop: model.stop)
+        }
     }
 
     // MARK: - Sections
@@ -153,15 +166,19 @@ struct StopDetailView: View {
                             systemImage: "moon.zzz",
                             description: Text("La fuente respondió, pero no hay ningún paso previsto ahora mismo."))
                     } else {
-                        ForEach(result.arrivals) { ArrivalRow(arrival: $0) }
+                        ForEach(result.arrivals) { arrival in
+                            ArrivalRow(arrival: arrival)
+                                .contextMenu { onboardButton(for: arrival) }
+                        }
                     }
 
                 case .cache(let fetchedAt, let failure):
                     RealtimeFailureBanner(reason: failure)
                         .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                    ForEach(result.arrivals) {
-                        ArrivalRow(arrival: $0,
+                    ForEach(result.arrivals) { arrival in
+                        ArrivalRow(arrival: arrival,
                                    overrideKind: .cached(age: Date().timeIntervalSince(fetchedAt)))
+                            .contextMenu { onboardButton(for: arrival) }
                     }
 
                 case .unavailable(let failure):
@@ -181,6 +198,18 @@ struct StopDetailView: View {
             if let result = model.result, case .realtime(let at) = result.source {
                 Text("Actualizado \(at.formatted(date: .omitted, time: .standard)). Se refresca cada 30 s mientras esta pantalla esté abierta.")
             }
+        }
+    }
+
+    /// "Estoy en este bus" from an arrival row.
+    ///
+    /// The shortcut worth having: the line and the stop are both certain here, so the resolver
+    /// never has to project a GPS fix onto a route or ask which direction this is — it only has
+    /// to pick which service of that line is passing now. The sheet is the same one the map
+    /// uses, seeded with what this screen already knows.
+    private func onboardButton(for arrival: Arrival) -> some View {
+        Button("Estoy en este bus", systemImage: "bus.fill") {
+            declaringLine = DeclaredLine(name: arrival.rawLine)
         }
     }
 

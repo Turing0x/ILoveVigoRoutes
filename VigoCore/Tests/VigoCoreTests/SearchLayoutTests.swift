@@ -11,43 +11,35 @@ struct SearchLayoutTests {
     func shortcutsNoFeed() {
         let layout = SearchLayoutBuilder.shortcuts(
             showsSavedJourneys: true, hasData: false,
-            savedJourneys: 3, savedPlaces: 3, favourites: 3, nearby: 3, lines: 45)
+            recents: 4, savedJourneys: 3, savedPlaces: 3, favourites: 3)
         #expect(layout.sections.isEmpty)
         #expect(layout.emptyState == .noFeed)
     }
 
-    /// H-23: el texto de ayuda ignoraba "Cerca de ti" y "Líneas con servicio" — con 45
-    /// líneas siempre presentes en un feed importado, el mensaje casi nunca debía verse.
-    @Test("Con cercanía o líneas ya hay algo que enseñar, aunque nada esté guardado")
-    func shortcutsNearbyOrLinesCountAsContent() {
-        let onlyLines = SearchLayoutBuilder.shortcuts(
-            showsSavedJourneys: true, hasData: true,
-            savedJourneys: 0, savedPlaces: 0, favourites: 0, nearby: 0, lines: 45)
-        #expect(onlyLines.sections == [.lines])
-        #expect(onlyLines.emptyState == .none)
-
-        let onlyNearby = SearchLayoutBuilder.shortcuts(
-            showsSavedJourneys: true, hasData: true,
-            savedJourneys: 0, savedPlaces: 0, favourites: 0, nearby: 4, lines: 0)
-        #expect(onlyNearby.sections == [.nearby])
-        #expect(onlyNearby.emptyState == .none)
-    }
-
-    @Test("Nada guardado, ni cerca, ni líneas: la instalación recién estrenada")
+    @Test("Nada guardado, favorito ni reciente: la instalación recién estrenada")
     func shortcutsGettingStarted() {
         let layout = SearchLayoutBuilder.shortcuts(
             showsSavedJourneys: true, hasData: true,
-            savedJourneys: 0, savedPlaces: 0, favourites: 0, nearby: 0, lines: 0)
+            recents: 0, savedJourneys: 0, savedPlaces: 0, favourites: 0)
         #expect(layout.sections.isEmpty)
         #expect(layout.emptyState == .gettingStarted)
     }
 
-    @Test("Orden fijo: trayectos, lugares, favoritas, cerca de ti, líneas")
+    @Test("Solo recientes ya cuenta como contenido, aunque nada esté guardado")
+    func shortcutsRecentsCountAsContent() {
+        let layout = SearchLayoutBuilder.shortcuts(
+            showsSavedJourneys: true, hasData: true,
+            recents: 2, savedJourneys: 0, savedPlaces: 0, favourites: 0)
+        #expect(layout.sections == [.recents])
+        #expect(layout.emptyState == .none)
+    }
+
+    @Test("Orden fijo: recientes, trayectos, lugares, favoritas")
     func shortcutsOrder() {
         let layout = SearchLayoutBuilder.shortcuts(
             showsSavedJourneys: true, hasData: true,
-            savedJourneys: 1, savedPlaces: 1, favourites: 1, nearby: 1, lines: 1)
-        #expect(layout.sections == [.savedJourneys, .savedPlaces, .favourites, .nearby, .lines])
+            recents: 1, savedJourneys: 1, savedPlaces: 1, favourites: 1)
+        #expect(layout.sections == [.recents, .savedJourneys, .savedPlaces, .favourites])
     }
 
     /// `.standalone` no ofrece trayectos guardados (no hay origen/destino que emparejar) —
@@ -56,7 +48,7 @@ struct SearchLayoutTests {
     func shortcutsHidesSavedJourneysWhenPurposeSaysNo() {
         let layout = SearchLayoutBuilder.shortcuts(
             showsSavedJourneys: false, hasData: true,
-            savedJourneys: 5, savedPlaces: 0, favourites: 0, nearby: 0, lines: 0)
+            recents: 0, savedJourneys: 5, savedPlaces: 0, favourites: 0)
         #expect(!layout.sections.contains(.savedJourneys))
         #expect(layout.emptyState == .gettingStarted, "5 trayectos ocultos no cuentan como contenido")
     }

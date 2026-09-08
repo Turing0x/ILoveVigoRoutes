@@ -38,6 +38,11 @@ public enum PlanOutcome: Sendable {
     case outsideFeedWindow(ClosedRange<ServiceDate>)
     case noServiceOnDay(ServiceDate)
     case noJourneyFound(horizon: TimeInterval)
+    /// The bus the traveller said they were on can no longer be found in the timetable — the
+    /// feed was reimported and reshaped the line, or no service of it is running at this hour.
+    /// Distinct from every case above because the fix is not another search: it is asking the
+    /// traveller again which bus they are on.
+    case onboardRideUnresolvable(OnboardRideResolution.Failure)
     case noData
 }
 

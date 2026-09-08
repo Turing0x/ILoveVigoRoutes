@@ -5,6 +5,9 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.scenePhase) private var scenePhase
     @State private var selection = AppTab.map
+    /// This view's own lease on the app's single location manager, held only while a bus is
+    /// declared. A `UUID` per holder, so it cannot collapse into the map's lease.
+    @State private var onboardLocationHolder = LocationDemand.Holder()
 
     enum AppTab: Hashable { case favourites, map }
 
@@ -25,8 +28,17 @@ struct RootView: View {
         }
         // Above the tab bar, not inside `MapScreen`: the requirement is that this stays
         // visible across tabs, and `MapScreen`'s own `safeAreaInset` is scoped to Mapa alone.
+        // One capsule, never two: an onboard ride and an active journey are mutually
+        // exclusive states, and the repository makes the transition between them atomic. The
+        // onboard branch comes first only because it is the transient one — a ride becomes a
+        // journey the moment a plan is accepted.
         .safeAreaInset(edge: .bottom) {
-            if let journey = environment.activeJourney.journey {
+            if let ride = environment.onboardRide.ride {
+                OnboardRideBar(
+                    ride: ride, staleness: environment.onboardRide.staleness,
+                    looksOffRide: environment.onboardRide.looksOffRide,
+                    onEnd: { environment.onboardRide.end() })
+            } else if let journey = environment.activeJourney.journey {
                 ActiveJourneyBar(
                     journey: journey, staleness: environment.activeJourney.staleness,
                     onExtend: { environment.activeJourney.extend() },
@@ -47,7 +59,25 @@ struct RootView: View {
         // read `.active` once the app comes back — staleness is only ever recomputed, never
         // ticked on a timer nobody asked for.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { environment.activeJourney.reload() }
+            if phase == .active {
+                environment.activeJourney.reload()
+                environment.onboardRide.reload()
+            }
+        }
+        // The one place the onboard ride is followed. A lease is taken only while a ride is
+        // declared, and every new fix is offered to the store, which writes only when a stop
+        // was actually passed. Foreground only: the app has no background location mode, which
+        // is why the capsule shows the age of what it knows.
+        .onChange(of: environment.onboardRide.ride != nil, initial: true) { _, riding in
+            if riding {
+                environment.location.acquire(onboardLocationHolder, precision: .fine)
+            } else {
+                environment.location.release(onboardLocationHolder)
+            }
+        }
+        .onChange(of: environment.location.coordinate.map(Coordinate.from)) { _, coordinate in
+            guard let coordinate, environment.onboardRide.ride != nil else { return }
+            Task { await environment.onboardRide.advance(to: coordinate) }
         }
     }
 }

@@ -91,4 +91,31 @@ struct MigrationTests {
         #expect(hasActiveJourney)
         #expect(hasRecentSearch)
     }
+
+    /// `v4` adds `onboardRide`, the bus the traveller says they are on right now.
+    @Test("v3 user data survives migrating to v4, and onboardRide starts empty")
+    func v3DataSurvivesToV4() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v3")
+
+        try queue.write { db in
+            try ActiveJourneyRow(
+                id: ActiveJourneyRow.currentID, startedAt: Date(), state: "active",
+                destinationName: "Biblioteca", destinationStopID: nil,
+                destinationLatitude: 42.2, destinationLongitude: -8.7,
+                scheduledArrival: Date(), payload: Data("{}".utf8)).insert(db)
+        }
+
+        try AppDatabase.migrator.migrate(queue)
+
+        #expect(try queue.read { try ActiveJourneyRow.fetchCount($0) } == 1)
+        #expect(try queue.read { try OnboardRideRow.fetchCount($0) } == 0)
+        #expect(try queue.read { try $0.tableExists("onboardRide") })
+    }
+
+    @Test("A fresh database migrates straight to v4 with onboardRide present")
+    func freshDatabaseHasV4Tables() throws {
+        let db = try AppDatabase.inMemory()
+        #expect(try db.writer.read { try $0.tableExists("onboardRide") })
+    }
 }

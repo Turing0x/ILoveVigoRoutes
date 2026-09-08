@@ -59,8 +59,8 @@ struct MapSearchSheet: View {
     @State private var query = ""
     @State private var results: [Stop] = []
     @State private var addresses: AddressSearchModel?
-    /// Only needed for the "Mi ubicación" row and the distance shown nowhere else in this
-    /// sheet — a lease on the app's single manager rather than a second one of its own (H-50).
+    /// Only needed for the "Mi ubicación" row — a lease on the app's single manager rather
+    /// than a second one of its own (H-50).
     /// Presented over the map, this sheet used to run a `CLLocationManager` alongside the
     /// map's, and the map's `onDisappear` does not fire under a sheet, so both stayed live;
     /// worse, the eager `LocationProvider()` initialiser here rebuilt one on every update tick.
@@ -68,11 +68,7 @@ struct MapSearchSheet: View {
     @State private var showingMapPicker = false
     @State private var resolvingDroppedPin = false
     @State private var savingPlaceFrom: Place?
-    @State private var nearby: [NearbyStop] = []
     @State private var lines: [Route] = []
-    /// "Líneas con servicio" starts collapsed to 8 rows (H-24): the section listed all 45,
-    /// none of them tappable, and dwarfed every other section in an otherwise empty sheet.
-    @State private var showingAllLines = false
 
     var body: some View {
         NavigationStack {
@@ -105,16 +101,7 @@ struct MapSearchSheet: View {
                 (try? repository.routesWithService()) ?? []
             }.value
         }
-        .task(id: roundedCoordinate) {
-            guard let coordinate = environment.location.coordinate else { return }
-            let repository = environment.repository
-            nearby = await Task.detached(priority: .userInitiated) {
-                (try? repository.nearbyStops(latitude: coordinate.latitude,
-                                             longitude: coordinate.longitude,
-                                             radiusMetres: 800, limit: 8)) ?? []
-            }.value
-        }
-        // Off the main actor, like `lines`/`nearby` above: at 1154 real stops this query is
+        // Off the main actor, like `lines` above: at 1154 real stops this query is
         // sub-millisecond, but it was still running synchronously in `.onChange` before,
         // blocking the next `body` redraw on every keystroke for no reason the other two
         // queries on this same screen don't already avoid. `.task(id:)` also cancels a
@@ -210,18 +197,6 @@ struct MapSearchSheet: View {
                                          longitude: coordinate.longitude)))
     }
 
-    /// `location.coordinate` moves with every GPS fix; rounding to four decimals (roughly
-    /// 11 m, `Coordinate.rounded(toDecimals:)` in `VigoCore` — H-48: the same rounding the
-    /// Fase 12 plan specifies for `recentSearch`'s `dedupKey`, kept in one place so the two
-    /// cannot drift apart) before using it as a `.task(id:)` is what keeps "Cerca de ti" from
-    /// reissuing its query on jitter alone. The task itself still reads the live coordinate,
-    /// so the query is never stale — only *how often* it reruns is throttled here.
-    private var roundedCoordinate: Coordinate? {
-        environment.location.coordinate.map {
-            Coordinate(latitude: $0.latitude, longitude: $0.longitude).rounded(toDecimals: 4)
-        }
-    }
-
     // MARK: - Con el campo vacío
 
     /// A saved journey is either planned whole (`.explore`) or contributes one end
@@ -233,16 +208,43 @@ struct MapSearchSheet: View {
         return true
     }
 
+    /// `Recientes`, filtered against what already has its own permanent section: a recent
+    /// that is now a favourite, or whose place is now saved, would otherwise duplicate what
+    /// shows a few rows below it. Filtered here, at read time, never at write time — the
+    /// decision to favourite or save something is usually made well after the search that
+    /// produced this row, and filtering on write would freeze a choice that had not been
+    /// made yet.
+    private var visibleRecents: [RecentSearch] {
+        let favouriteStopIDs = Set(environment.favourites.stops.map(\.id))
+        let savedPlaceKeys = Set(environment.savedPlaces.places.map {
+            RecentSearchKey.dedupKey(name: $0.name, anchor: $0.anchor)
+        })
+        return environment.recents.items.filter { recent in
+            if let stopID = recent.stopID, favouriteStopIDs.contains(stopID) { return false }
+            return !savedPlaceKeys.contains(recent.dedupKey)
+        }
+    }
+
     @ViewBuilder
     private var shortcuts: some View {
         let layout = SearchLayoutBuilder.shortcuts(
             showsSavedJourneys: showsSavedJourneys,
             hasData: environment.hasData,
+            recents: visibleRecents.count,
             savedJourneys: environment.savedPlaces.journeys.count,
             savedPlaces: environment.savedPlaces.places.count,
-            favourites: environment.favourites.stops.count,
-            nearby: nearby.count,
-            lines: lines.count)
+            favourites: environment.favourites.stops.count)
+
+        if layout.sections.contains(.recents) {
+            Section("Recientes") {
+                ForEach(visibleRecents) { recentRow($0) }
+                Button(role: .destructive) {
+                    environment.recents.clear()
+                } label: {
+                    Text("Borrar recientes")
+                }
+            }
+        }
 
         if layout.sections.contains(.savedJourneys) {
             Section("Trayectos guardados") {
@@ -287,38 +289,10 @@ struct MapSearchSheet: View {
             }
         }
 
-        if layout.sections.contains(.nearby) {
-            Section("Cerca de ti") {
-                ForEach(nearby) { nearbyRow($0) }
-            }
-        } else if environment.hasData, environment.location.isDenied {
-            // H-29: an empty section that says nothing looks identical to "nobody is
-            // nearby" — the two have very different fixes.
-            Section("Cerca de ti") {
-                Text("El permiso de ubicación está desactivado, así que no se pueden mostrar las paradas cercanas. Actívalo en Ajustes.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        if layout.sections.contains(.lines) {
-            linesSection
-        }
-
         switch layout.emptyState {
         case .noFeed: noFeedMessage
         case .gettingStarted: gettingStartedMessage
         case .none, .queryTooShortForAddresses, .noResults: EmptyView()
-        }
-    }
-
-    @ViewBuilder
-    private var linesSection: some View {
-        Section("Líneas con servicio") {
-            ForEach(showingAllLines ? lines : Array(lines.prefix(8))) { lineRow($0) }
-            if !showingAllLines, lines.count > 8 {
-                Button("Ver todas (\(lines.count))") { showingAllLines = true }
-            }
         }
     }
 
@@ -444,6 +418,36 @@ struct MapSearchSheet: View {
         }
     }
 
+    /// Its own row, not `stopRow(_:)`: `favouriteActions` already owns that row's leading
+    /// swipe, and this needs the trailing one for its own delete — the two would collide on
+    /// a stop-anchored recent.
+    private func recentRow(_ recent: RecentSearch) -> some View {
+        Button {
+            pick(recent.mapPlace)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: recent.symbolName)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(recent.name).font(.subheadline).lineLimit(2)
+                    if let subtitle = recent.subtitle, !subtitle.isEmpty {
+                        Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                environment.recents.delete(dedupKey: recent.dedupKey)
+            } label: {
+                Label("Borrar", systemImage: "trash")
+            }
+        }
+    }
+
     private func addressRow(_ suggestion: AddressSuggestion,
                             addresses: AddressSearchModel) -> some View {
         Button {
@@ -491,48 +495,17 @@ struct MapSearchSheet: View {
     }
 
     /// The one funnel every place this sheet can produce passes through — a stop, an
-    /// address, a saved place, "Mi ubicación", a dropped pin, "Cerca de ti", and (in
-    /// `.endpoint`) one end of a saved journey. `.explore`'s whole-journey pick is the one
-    /// exception, of necessity: planning both ends at once has no single `MapPlace` to hand
-    /// this. The Fase 12 plan (`recentSearch`) depends on this staying true — it is where a
-    /// pick would be registered.
+    /// address, a saved place, "Mi ubicación", a dropped pin, and (in `.endpoint`) one end of
+    /// a saved journey. `.explore`'s whole-journey pick is the one exception, of necessity:
+    /// planning both ends at once has no single `MapPlace` to hand this — which is also why
+    /// it alone never reaches "Recientes".
+    ///
+    /// Recording runs unconditionally: `environment.recents.record(_:)` is a no-op for
+    /// `.currentLocation` and `.savedPlace` (`RecentSearchKey.candidate(for:)` says so), so
+    /// this funnel does not need its own copy of that exclusion list.
     private func pick(_ place: MapPlace) {
+        environment.recents.record(place)
         onPick(place)
-    }
-
-    /// A stop ordered by straight-line distance — fixed 800 m radius, up to 8 results. No
-    /// radio picker: that made sense as a whole screen, not as one section of a sheet.
-    private func nearbyRow(_ nearby: NearbyStop) -> some View {
-        Button {
-            pick(.stop(nearby.stop))
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(nearby.stop.name).font(.subheadline).lineLimit(2)
-                    if !nearby.routeShortNames.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 5) {
-                                ForEach(nearby.routeShortNames, id: \.self) { LineBadge(name: $0) }
-                            }
-                        }
-                        .scrollClipDisabled()
-                    }
-                }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(distanceText(nearby.distanceMetres))
-                        .font(.caption.weight(.medium).monospacedDigit())
-                    Text("en línea recta").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .favouriteActions(for: nearby.stop)
-    }
-
-    private func distanceText(_ metres: Double) -> String {
-        metres < 1000 ? "\(Int(metres.rounded())) m"
-                      : String(format: "%.1f km", metres / 1000)
     }
 
     /// Not interactive: there is no query to filter stops by línea, so tapping one would
