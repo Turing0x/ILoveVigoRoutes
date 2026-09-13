@@ -47,6 +47,7 @@ struct MapScreen: View {
     @State private var lastTouch: CGPoint = .zero
     /// Whether the "¿en qué autobús vas?" sheet is up.
     @State private var declaringRide = false
+    @State private var choosingNearbyStop = false
 
     /// `CLLocationCoordinate2D` is not `Equatable`, so `onChange` cannot watch it directly.
     /// `Coordinate` is, and it is the type the rest of the flow speaks anyway.
@@ -248,6 +249,14 @@ struct MapScreen: View {
                 frame(journeys: model.drawn.journeys, traces: model.drawn.traces)
             }
             .sheet(isPresented: $declaringRide) { OnboardDeclareSheet() }
+            // Picking a stop hands it to the map's own card, which is the stop screen: this
+            // sheet closes itself and the flow's single sheet opens on that stop.
+            .sheet(isPresented: $choosingNearbyStop) {
+                NearbyStopsSheet { stop in
+                    if let wanted = defaultDetent(for: .place(.stop(stop))) { detent = wanted }
+                    model.select(.stop(stop))
+                }
+            }
             .overlay(alignment: .top) { hint(model) }
             .overlay(alignment: .topTrailing) { controls(model) }
             .overlay(alignment: .bottom) { followingBanner(model) }
@@ -316,6 +325,7 @@ struct MapScreen: View {
                           distanceText: model.distanceText(to: place),
                           routeBlockedReason: model.routeBlockedReason,
                           onRoute: { Task { await model.routeToSelectedPlace() } },
+                          onRouteFrom: { model.routeFromSelectedPlace() },
                           onClose: { dismissSheet(model) })
 
         case .routing, .journeyDetail:
@@ -516,6 +526,19 @@ struct MapScreen: View {
                     .background(.regularMaterial, in: Circle())
             }
             .accessibilityLabel("Capas del mapa")
+
+            // «Estoy en esta parada» starts here: the stops around you, pick yours.
+            Button {
+                choosingNearbyStop = true
+            } label: {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.title3)
+                    .frame(width: 24, height: 24)
+                    .padding(9)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .disabled(!environment.location.isAuthorized)
+            .accessibilityLabel("Paradas cercanas")
 
             // Declaring a bus lives here rather than in a sheet somebody has to find: the
             // moment it is useful is the moment somebody is sitting on a bus with the map

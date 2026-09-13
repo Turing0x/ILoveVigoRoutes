@@ -175,6 +175,27 @@ public struct MapNavigationState: Sendable {
         return route(to: place)
     }
 
+    /// "Ir a… desde esta parada": the selected place becomes the origin and the destination
+    /// is left for the user to pick.
+    ///
+    /// The origin is theirs, so following the GPS switches off — standing at a stop and
+    /// walking a few metres must not replace the stop with a pavement coordinate. Any previous
+    /// destination is dropped: it was asked from somewhere else.
+    ///
+    /// - Returns: `false` when no place is selected.
+    @discardableResult
+    public mutating func routeFromSelectedPlace() -> Bool {
+        guard let place = selectedPlace else { return false }
+        origin = place
+        destination = nil
+        originFollowsLocation = false
+        route = .idle
+        selectedAlternative = 0
+        isFollowing = false
+        mode = .routing
+        return true
+    }
+
     /// Same thing from anywhere: a saved journey, a search result taken straight to a route.
     @discardableResult
     public mutating func route(to place: MapPlace) -> Bool {

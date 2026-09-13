@@ -279,6 +279,15 @@ final class MapScreenModel {
         await plan()
     }
 
+    /// «Ir a… desde esta parada» on the selected stop. Nothing to plan yet: the destination is
+    /// still to be chosen, and choosing it re-plans through `setDestination`.
+    func routeFromSelectedPlace() {
+        guard state.routeFromSelectedPlace() else { return }
+        planningFailure = nil
+        drawn = DrawnRoute()
+        plannedAt = nil
+    }
+
     /// Runs the planner for whatever origin and destination the state currently holds.
     func plan() async {
         guard let query = state.routeQuery(now: Date()) else { return }

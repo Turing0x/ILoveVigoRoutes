@@ -418,6 +418,14 @@ predice a 3 horas vista; eso solo puede salir del horario planificado.
 **Pendiente:** volver a muestrear en hora punta y comprobar si aparecen `metros >= 0`.
 Hasta confirmarlo, la app debe tratar **toda** estimación como "no confirmada como tiempo real".
 
+**Remuestreo del 2026-09-13, 13:45–13:50 CEST (domingo, en servicio).** En las paradas 7270,
+6930, 14264 y 8750, **todas** las estimaciones traían `metros >= 0`. Los valores van de 877 m a
+36.324 m; en la 7270, un 15C a 129 min marcaba 36.324 m. La hipótesis se confirma solo en parte:
+`metros >= 0` significa que la fuente tiene un vehículo asignado a esa pasada, **no** que esté
+cerca ni que la estimación sea fina. A 129 minutos, ese vehículo aún tiene que dar una vuelta
+entera. Además, las estimaciones sí corrigen el horario: la línea 11 iba a 23 min en el GTFS y a
+26–27 min en vivo, y un 11 que el horario ponía a las 14:42 no aparecía en vivo.
+
 ### 3.8 Otros `tipo` disponibles en `api2.jsp` (verificados en vivo)
 
 | `tipo` | Devuelve | Verificado |
@@ -515,6 +523,20 @@ Tanto la API JSON como el HTML devolvieron **exactamente 5 estimaciones** en las
 probadas. El HTML tiene paginación (`__VIEWSTATE` + `__EVENTTARGET=GridView1`) para ver más.
 No pude determinar si 5 es un tope duro o simplemente eran los buses previstos; a las 04:40
 con un solo servicio nocturno activo, es plausible que fuera todo lo que había.
+
+**Resuelto el 2026-09-13, en servicio.** Las 5 filas son **el tamaño de página del HTML**, no un
+tope de la fuente. La API JSON no tiene tope observado y trae unas dos pasadas por línea:
+
+| Parada | Filas en la API JSON | InfoBus HTML |
+|---|---:|---|
+| 7270 | 7 | 5 en la página 1 y 2 en la página 2 (`__EVENTARGUMENT=Page$2`), las mismas |
+| 14264 | 19 | 5 por página |
+| 8750 | 14 | 5 por página |
+| 6930 | 2 | 2, sin paginar |
+
+Los minutos coinciden fila a fila entre las dos fuentes, con ±1 min según el segundo en que se
+consulta cada una. Es decir, InfoBus (la web a la que lleva el QR de cada poste) y la app
+enseñan **los mismos datos**. La app los ve todos de una vez.
 
 ---
 

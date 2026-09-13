@@ -114,14 +114,50 @@ struct LineTimetableView: View {
     /// Filtered to this line: the rest of the stop's traffic is not what was asked about.
     @ViewBuilder
     private var liveSection: some View {
+        if let next = nextBus {
+            Section {
+                HStack {
+                    Text("Próximo").font(.headline)
+                    Spacer()
+                    Text(next.date, format: .dateTime.hour().minute())
+                        .font(.headline.monospacedDigit())
+                    Text("· \(WaitTime(minutes: next.bus.minutes).compactText)")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            } footer: {
+                switch next.bus {
+                case .live: Text("Según la fuente en vivo, hacia \(next.bus.destination).")
+                case .scheduled: Text("Según el horario programado, hacia \(next.bus.destination). La fuente en vivo no reporta ninguno de esta línea ahora.")
+                }
+            }
+        }
         if let live, !lineArrivals.isEmpty {
             Section {
-                ForEach(lineArrivals) { CompactArrivalRow(arrival: $0) }
+                ForEach(lineArrivals) { CompactArrivalRow(arrival: $0, fetchedAt: live.source.fetchedAt) }
             } header: {
                 Text("Ahora mismo")
             } footer: {
                 Text("Lo de abajo es el horario programado. Estos son los que la fuente en vivo está reportando para la línea \(routeShortName).")
             }
+        }
+    }
+
+    /// The bus of this line closest to now, live first and timetable otherwise — the same
+    /// rule the stop card uses, through the same function.
+    private var nextBus: (bus: StopLines.NextBus, date: Date)? {
+        guard let live else { return nil }
+        let now = Date()
+        let route = Route(id: routeID, shortName: routeShortName, longName: "",
+                          routeType: 3, colorHex: nil, textColorHex: nil)
+        guard let next = StopLines.build(routes: [route], arrivals: live.arrivals,
+                                         fetchedAt: live.source.fetchedAt,
+                                         scheduled: live.scheduled, now: now)
+            .first(where: { $0.route?.id == routeID })?.next else { return nil }
+        switch next {
+        case .live(_, let minutes): return (next, now.addingTimeInterval(TimeInterval(minutes * 60)))
+        case .scheduled(let departure, _): return (next, departure.absoluteDate)
         }
     }
 

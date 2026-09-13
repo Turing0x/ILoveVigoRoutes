@@ -312,6 +312,22 @@ public struct TransitRepository: Sendable {
             .sorted(by: Self.lineNameOrdering)
     }
 
+    /// The routes serving a stop, whole — for the screens that need a `RouteID` to open a
+    /// line's timetable, not just a label to draw. Same filter and order as
+    /// `routeShortNames(stopID:)`.
+    public func routes(stopID: StopID) throws -> [Route] {
+        try database.writer.read { db in
+            try Route.fetchAll(db, sql: """
+                SELECT DISTINCT r.*
+                FROM stopRoute sr
+                JOIN route r ON r.id = sr.routeID
+                WHERE sr.stopID = ?
+                  AND EXISTS (SELECT 1 FROM trip t WHERE t.routeID = r.id)
+                """, arguments: [stopID.rawValue])
+                .sorted { Self.lineNameOrdering($0.shortName, $1.shortName) }
+        }
+    }
+
     /// Human ordering for line labels: numbers ascending, then lettered lines.
     public static func lineNameOrdering(_ a: String, _ b: String) -> Bool {
         func key(_ s: String) -> (Int, Int, String) {

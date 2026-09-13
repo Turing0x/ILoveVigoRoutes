@@ -116,6 +116,37 @@ struct MapNavigationStateTests {
         #expect(state.origin?.coordinate == here)
     }
 
+    @Test("«Ir a… desde esta parada»: la parada es el origen, el destino queda por elegir")
+    func routeFromSelectedStop() {
+        var state = MapNavigationState()
+        let withoutCard = state.routeFromSelectedPlace()
+        #expect(!withoutCard, "sin ficha abierta no hay origen que fijar")
+
+        state.updateCurrentLocation(here)
+        state.setDestination(poi("Antes"))
+        state.select(stopPlace())
+        let started = state.routeFromSelectedPlace()
+        #expect(started)
+        #expect(state.mode == .routing)
+        #expect(state.origin == stopPlace())
+        #expect(state.destination == nil)
+        #expect(!state.originFollowsLocation)
+        #expect(state.routeQuery(now: clock) == nil)
+
+        state.updateCurrentLocation(there)
+        #expect(state.origin == stopPlace(), "un fix del GPS no pisa la parada")
+
+        state.setDestination(poi("Destino"))
+        #expect(state.routeQuery(now: clock)?.origin == stopPlace().place)
+
+        var empty = state
+        empty.reset()
+        empty.select(stopPlace())
+        empty.routeFromSelectedPlace()
+        empty.dismiss()
+        #expect(empty.mode == .browsing, "sin destino, volver atrás es el mapa limpio")
+    }
+
     @Test("Intercambiar extremos apaga el seguimiento del GPS")
     func swapStopsFollowing() {
         var state = MapNavigationState()

@@ -26,6 +26,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Auditoría del motor RAPTOR** | ✅ Tandas 1–4 hechas. Detalle en `AUDITORIA-RAPTOR.md` |
 | **Comparación con el motor del Concello** | ✅ Todos los puntos ejecutados. Detalle en `AUDITORIA-MOTOR-VS-CONCELLO.md` |
 | **Fase 14 — Bus en marcha («ya voy montado»)** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
+| **Fase 15 — «Estoy en esta parada»** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -2482,3 +2483,68 @@ coordenadas, plegado de nombre, upsert, borrado uno/todos, huérfano tras reimpo
 `SearchLayoutTests.swift` actualizados. **530 tests** en el núcleo, verde. La app compila.
 
 Sin comprobar en dispositivo todavía.
+
+---
+
+## Fase 15 — «Estoy en esta parada»
+
+Plan en `~/.claude/plans/a-ver-vamos-a-wiggly-ritchie.md`. La situación que cubre: estás de pie en
+una parada y quieres saber tres cosas. Qué líneas pasan por ella, cuándo llega el siguiente de
+cada una y cómo ir a otro sitio **desde esa parada**, no desde tu coordenada GPS.
+
+Decisiones del propietario: la parada se fija con la **lista de cercanas** o con **el buscador
+por número**, sin escanear QR; las cercanas tienen **botón propio en el mapa**, no vuelven al
+buscador (se quitaron en la Fase 12); y todo vive en la **ficha de parada del mapa**, sin modo
+persistente.
+
+### Comparación con InfoBus (la web del QR de los postes)
+
+InfoBus y `api2.jsp` son **la misma fuente**: minutos idénticos, ±1 min. InfoBus pagina de 5 en
+5, mientras que la API trae todo de una vez, así que la app ve más que la web. Detalle y tabla en
+`DATA-SOURCES.md` §3.7 y §4.4. El único desfase era propio: los minutos no descontaban la edad
+de la respuesta (caché de 20 s más refresco de 30 s), y podían ir hasta un minuto por detrás.
+Arreglado.
+
+### Hecho
+
+- [x] **`TransitRepository.routes(stopID:)`**: las rutas enteras de una parada (hace falta el
+  `RouteID` para abrir el horario de una línea). Mismo filtro contra líneas fantasma y mismo
+  orden que `routeShortNames`.
+- [x] **`Departures/StopLines.swift`**: función pura, una fila por línea con su siguiente
+  autobús. El siguiente viene del tiempo real si la fuente lo tiene y del horario si no, y
+  `NextBus` lo dice por tipo, no con un booleano. `Arrival.minutes(at:fetchedAt:)` descuenta la
+  edad en minutos enteros, con suelo en cero. Una llegada real sin ruta en el GTFS (`PSA` frente
+  a `PSA1`) se conserva como fila propia sin enlace. Orden: lo que pasa antes, primero.
+- [x] **`MapNavigationState.routeFromSelectedPlace()`**: la parada pasa a ser el origen, el
+  destino se vacía y el seguimiento del GPS se apaga, para que andar dos metros no sustituya la
+  parada por una acera. Sin destino, `dismiss` cae al mapa limpio.
+- [x] **Ficha de parada** (`MapPlaceSheet`): botón «Ir a… desde esta parada», que abre el
+  selector de destino al momento (`MapRouteSheet.onAppear`), y la sección «Líneas en esta
+  parada», que sustituye a «Próximos pasos». Cada línea lleva su siguiente con la procedencia y,
+  al tocarla, abre `LineTimetableView`. El atajo «Estoy en este bus» se mantiene en el menú
+  contextual de cada fila.
+- [x] **`LineTimetableView`**: cabecera «Próximo HH:MM · N min», calculada con el mismo
+  `StopLines`.
+- [x] **Minutos descontados** también en `CompactArrivalRow` y en `ArrivalRow` de
+  `StopDetailView`.
+- [x] **`Map/NearbyStopsSheet.swift`**: el `NearbyView` que se borró en `6796166`, reconvertido
+  en hoja con selector de radio. Sale de un botón nuevo en los controles del mapa, y elegir una
+  parada abre su ficha. El proyecto se regenera con `xcodegen generate`; el `.xcodeproj` está en
+  `.gitignore`.
+
+**Verificado por mutación, siete veces:** en `StopLines`, (1) sin descuento de edad; (2) el
+siguiente del horario como el primero de la lista; (3) descartar las filas sin ruta; (4) el
+horario ganándole al tiempo real; (5) un reloj atrasado sumando minutos. En el estado, (6) el
+GPS pisando la parada; (7) conservar el destino anterior. Las siete tumban tests.
+
+**541 tests** en el núcleo (63 suites), verde (+11). La app compila en Debug y en Release contra
+`generic/platform=iOS`.
+
+### Pendiente de comprobar en dispositivo
+
+- [ ] El botón de cercanas lista paradas por distancia, y el radio cambia la lista
+- [ ] Tocar una abre su ficha con todas sus líneas
+- [ ] Los minutos de una línea coinciden con InfoBus de esa parada (±1 min)
+- [ ] Tocar una línea abre su horario con el próximo arriba y la siguiente marcada
+- [ ] «Ir a… desde esta parada» → elegir destino → alternativas que salen de esa parada
+- [ ] Buscar «7270» en el buscador y hacer lo mismo
