@@ -131,6 +131,11 @@ struct MapRouteSheet: View {
                                    onStopFollowing: onStopFollowing,
                                    onStartActiveJourney: onStartActiveJourney)
             }
+            // «Ir a… desde esta parada» arrives with the origin set and nothing else. The only
+            // useful next gesture is choosing where to go, so the sheet offers it straight away.
+            .onAppear {
+                if state.origin != nil, state.destination == nil { editing = .destination }
+            }
             .sheet(item: $editing) { role in
                 MapSearchSheet(purpose: .endpoint(role),
                                onPick: { onPick(role, $0); editing = nil },

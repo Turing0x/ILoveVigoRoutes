@@ -252,6 +252,17 @@ struct RepositoryTests {
         #expect(try Set(repository.routeShortNames(stopID: StopID("3493"))) == ["C1", "N4"])
     }
 
+    @Test("Lists the routes serving a stop, with ids, in the same order as their labels")
+    func routesAtStop() throws {
+        let repository = TransitRepository(database: try Fixture.importedDatabase())
+        let stopID = StopID("3493")
+        let routes = try repository.routes(stopID: stopID)
+        #expect(routes.map(\.shortName) == (try repository.routeShortNames(stopID: stopID)))
+        #expect(Set(routes.map(\.id)).count == routes.count)
+        let withService = Set(try repository.routesWithService().map(\.id))
+        #expect(routes.allSatisfy { withService.contains($0.id) }, "no ghost lines")
+    }
+
     @Test("Orders line labels numerically then alphabetically")
     func lineOrdering() {
         let sorted = ["A", "15B", "C1", "2", "10", "N4"].sorted(by: TransitRepository.lineNameOrdering)

@@ -14,18 +14,19 @@ struct StopArrivalsSummary: View {
     var body: some View {
         if let result {
             switch result.source {
-            case .realtime:
+            case .realtime(let at):
                 if result.arrivals.isEmpty {
                     fallbackRows(result.scheduled, note: "Sin pasos previstos ahora mismo.")
                 } else {
-                    ForEach(result.arrivals.prefix(limit)) { CompactArrivalRow(arrival: $0) }
+                    ForEach(result.arrivals.prefix(limit)) { CompactArrivalRow(arrival: $0, fetchedAt: at) }
                 }
             case .cache(let at, let failure):
                 Text(failure)
                     .font(.caption2).foregroundStyle(.orange).lineLimit(2)
                 ForEach(result.arrivals.prefix(limit)) {
                     CompactArrivalRow(arrival: $0,
-                                      overrideKind: .cached(age: Date().timeIntervalSince(at)))
+                                      overrideKind: .cached(age: Date().timeIntervalSince(at)),
+                                      fetchedAt: at)
                 }
             case .unavailable(let failure):
                 Text(failure)
@@ -55,9 +56,16 @@ struct StopArrivalsSummary: View {
 struct CompactArrivalRow: View {
     let arrival: Arrival
     var overrideKind: DataKind?
+    /// When the source produced `arrival`, so the minutes shown count down with the clock
+    /// instead of repeating the source's number until the next refresh.
+    var fetchedAt: Date?
 
     private var kind: DataKind {
         overrideKind ?? (arrival.confidence.hasTrackedVehicle ? .tracked : .estimated)
+    }
+
+    private var minutes: Int {
+        fetchedAt.map { arrival.minutes(at: Date(), fetchedAt: $0) } ?? arrival.minutes
     }
 
     var body: some View {
@@ -66,12 +74,12 @@ struct CompactArrivalRow: View {
             Text(arrival.destination).font(.caption).lineLimit(1).foregroundStyle(.secondary)
             Spacer(minLength: 2)
             DataKindBadge(kind: kind, compact: true)
-            Text(WaitTime(minutes: arrival.minutes).compactText)
+            Text(WaitTime(minutes: minutes).compactText)
                 .font(.subheadline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(kind.tint)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("Línea \(arrival.rawLine), \(WaitTime(minutes: arrival.minutes).spoken), \(kind.label)"))
+        .accessibilityLabel(Text("Línea \(arrival.rawLine), \(WaitTime(minutes: minutes).spoken), \(kind.label)"))
     }
 }
 

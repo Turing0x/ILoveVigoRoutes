@@ -159,7 +159,7 @@ struct StopDetailView: View {
         Section {
             if let result = model.result {
                 switch result.source {
-                case .realtime:
+                case .realtime(let fetchedAt):
                     if result.arrivals.isEmpty {
                         ContentUnavailableView(
                             "Sin autobuses previstos",
@@ -167,7 +167,7 @@ struct StopDetailView: View {
                             description: Text("La fuente respondió, pero no hay ningún paso previsto ahora mismo."))
                     } else {
                         ForEach(result.arrivals) { arrival in
-                            ArrivalRow(arrival: arrival)
+                            ArrivalRow(arrival: arrival, fetchedAt: fetchedAt)
                                 .contextMenu { onboardButton(for: arrival) }
                         }
                     }
@@ -177,7 +177,8 @@ struct StopDetailView: View {
                         .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                     ForEach(result.arrivals) { arrival in
                         ArrivalRow(arrival: arrival,
-                                   overrideKind: .cached(age: Date().timeIntervalSince(fetchedAt)))
+                                   overrideKind: .cached(age: Date().timeIntervalSince(fetchedAt)),
+                                   fetchedAt: fetchedAt)
                             .contextMenu { onboardButton(for: arrival) }
                     }
 
@@ -259,10 +260,16 @@ struct StopDetailView: View {
 struct ArrivalRow: View {
     let arrival: Arrival
     var overrideKind: DataKind?
+    /// When the source produced `arrival`; see `CompactArrivalRow.fetchedAt`.
+    var fetchedAt: Date?
 
     private var kind: DataKind {
         if let overrideKind { return overrideKind }
         return arrival.confidence.hasTrackedVehicle ? .tracked : .estimated
+    }
+
+    private var minutes: Int {
+        fetchedAt.map { arrival.minutes(at: Date(), fetchedAt: $0) } ?? arrival.minutes
     }
 
     var body: some View {
@@ -282,13 +289,13 @@ struct ArrivalRow: View {
                 }
             }
             Spacer(minLength: 4)
-            MinutesLabel(minutes: arrival.minutes, tint: kind.tint)
+            MinutesLabel(minutes: minutes, tint: kind.tint)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("""
             Línea \(arrival.rawLine) a \(arrival.destination), \
-            \(WaitTime(minutes: arrival.minutes).spoken), \(kind.label)
+            \(WaitTime(minutes: minutes).spoken), \(kind.label)
             """))
     }
 }
