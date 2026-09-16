@@ -785,3 +785,57 @@ struct MapNavigationEstimateNoticeTests {
         #expect(state.estimateNotice == nil)
     }
 }
+
+@Suite("Aviso de parada cercana en el mapa")
+struct MapNavigationNearbyStopHintTests {
+
+    private let clock = Date(timeIntervalSince1970: 1_757_000_000)
+
+    private func hint() -> NearbyStopHint {
+        let n = PlannerFixture.stop("N", northMetres: 200, name: "N cercana")
+        let d = PlannerFixture.stop("D", eastMetres: 3_000)
+        let journey = Journey(legs: [
+            .ride(routeID: RouteID("r2"), routeShortName: "L2", headsign: nil,
+                  tripID: TripID("t2"), board: n, alight: d,
+                  departure: clock, arrival: clock.addingTimeInterval(600),
+                  intermediateStops: []),
+        ], departure: clock, arrival: clock.addingTimeInterval(600), transfers: 0)
+        return NearbyStopHint(stop: n, walkSeconds: 240, arrivesEarlierBy: 900, journey: journey)
+    }
+
+    private func planned(_ outcome: PlanOutcome) -> MapNavigationState {
+        var state = MapNavigationState()
+        state.planningStarted()
+        state.planningFinished(outcome, nearbyStopHint: hint())
+        return state
+    }
+
+    @Test("Se ve con alternativas y también cuando no se encontró nada")
+    func visibleWithAnAnswer() {
+        #expect(planned(.journeys([hint().journey])).visibleNearbyStopHint != nil)
+        #expect(planned(.noJourneyFound(horizon: 3_600)).visibleNearbyStopHint != nil)
+    }
+
+    @Test("No sobrevive a que se vacíe la ruta")
+    func diesWithTheRoute() {
+        var state = planned(.journeys([hint().journey]))
+        state.reset()
+        #expect(state.visibleNearbyStopHint == nil)
+    }
+
+    @Test("Una búsqueda nueva sin aviso limpia el de la anterior")
+    func aFreshSearchClearsIt() {
+        var state = planned(.journeys([hint().journey]))
+        state.planningStarted()
+        #expect(state.visibleNearbyStopHint == nil, "mientras busca no hay respuesta que matizar")
+        state.planningFinished(.journeys([hint().journey]))
+        #expect(state.visibleNearbyStopHint == nil)
+    }
+
+    @Test("Un error al planificar lo quita")
+    func thrownFailureClearsIt() {
+        var state = planned(.journeys([hint().journey]))
+        state.planningFailed()
+        #expect(state.nearbyStopHint == nil)
+    }
+}

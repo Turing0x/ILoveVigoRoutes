@@ -61,12 +61,20 @@ public struct PlanResult: Sendable {
     /// sentence to show.
     public let schedule: ServiceDaySource
 
+    /// A clearly better stop nearby, when the origin was a stop the traveller chose.
+    ///
+    /// Always `nil` for any other origin: a coordinate already searches every stop within
+    /// walking distance, so there is nothing that search could have left out.
+    public let nearbyStopHint: NearbyStopHint?
+
     public init(outcome: PlanOutcome, feedStatus: FeedStatus,
-                computeDuration: TimeInterval, schedule: ServiceDaySource = .observed) {
+                computeDuration: TimeInterval, schedule: ServiceDaySource = .observed,
+                nearbyStopHint: NearbyStopHint? = nil) {
         self.outcome = outcome
         self.feedStatus = feedStatus
         self.computeDuration = computeDuration
         self.schedule = schedule
+        self.nearbyStopHint = nearbyStopHint
     }
 }
 
@@ -99,11 +107,12 @@ public struct JourneyPlanner: Sendable {
         options.accessibility = query.accessibility
         let walk = WalkModel(options: options)
 
+        var hint: NearbyStopHint?
         func finish(_ outcome: PlanOutcome, feedStatus: FeedStatus,
                     schedule: ServiceDaySource = .observed) -> PlanResult {
             PlanResult(outcome: outcome, feedStatus: feedStatus,
                        computeDuration: Date().timeIntervalSince(started),
-                       schedule: schedule)
+                       schedule: schedule, nearbyStopHint: hint)
         }
 
         let feedStatus = try repository.feedStatus()
@@ -147,10 +156,26 @@ public struct JourneyPlanner: Sendable {
         let schedule = resolved.source
 
         let timetable = try await store.timetable(anchor: day, profile: query.accessibility)
-        let accessWalks = access.compactMap { nearby -> StopWalk? in
+        let radiusWalks = access.compactMap { nearby -> StopWalk? in
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
             return StopWalk(stop: index, seconds: Int32(walk.seconds(metres: nearby.distanceMetres,
                                                                      as: .accessEgress)))
+        }
+        // A stop chosen as origin is where the traveller is standing, not a point to search
+        // around. Searching the radius from it let a bus from a stop five minutes' walk away
+        // replace every bus from the chosen one in the same RAPTOR round — the 5720 → Concello
+        // case, where the 4C at the traveller's own stop was never offered. A stop with no
+        // service in this timetable gets no access at all rather than a quiet fall back to the
+        // radius: the hint below is where the other stops are allowed to speak.
+        let anchor: Stop?
+        let accessWalks: [StopWalk]
+        switch query.origin {
+        case .stop(let stop):
+            anchor = stop
+            accessWalks = timetable.index(of: stop.id).map { [StopWalk(stop: $0, seconds: 0)] } ?? []
+        case .coordinate:
+            anchor = nil
+            accessWalks = radiusWalks
         }
         let egressWalks = egress.compactMap { nearby -> StopWalk? in
             guard let index = timetable.index(of: nearby.stop.id) else { return nil }
@@ -163,10 +188,21 @@ public struct JourneyPlanner: Sendable {
         // one of those passes on the main thread — invisible at one pass, a visible stall
         // once several run back to back. Detaching hands the whole batch to a background
         // thread; only the tiny result crosses back.
-        let alternatives = try await Task.detached(priority: .userInitiated) {
-            self.scan(timetable: timetable, access: accessWalks, egress: egressWalks,
-                      query: query, options: options)
+        let (alternatives, unanchored) = try await Task.detached(priority: .userInitiated) {
+            let alternatives = self.scan(timetable: timetable, access: accessWalks,
+                                         egress: egressWalks, query: query, options: options)
+            // Only a chosen stop needs the comparison; for a coordinate this second pass would
+            // be the first one again.
+            let unanchored = anchor == nil ? [] : self.scan(timetable: timetable, access: radiusWalks,
+                                                            egress: egressWalks, query: query,
+                                                            options: options)
+            return (alternatives, unanchored)
         }.value
+        if let anchor {
+            hint = NearbyStopHint.choose(origin: anchor, anchored: alternatives,
+                                         unanchored: unanchored,
+                                         minimumGain: options.nearbyStopHintMinimumGain)
+        }
 
         // A direct walk has no radius limit of its own, but one that would take longer than
         // the bus search is willing to look is not a "faster than the bus" fallback — it is

@@ -115,4 +115,16 @@ struct PlanOutcomeMessageTests {
         #expect(ServiceDate(yyyymmdd: 20_260_905).humanReadable == "05/09/2026")
         #expect(ServiceDate(yyyymmdd: 20_261_231).humanReadable == "31/12/2026")
     }
+
+    @Test("El aviso de parada cercana redondea la caminata hacia arriba y la ganancia hacia abajo")
+    func nearbyStopHintWording() {
+        let n = PlannerFixture.stop("N", northMetres: 200, name: "Rúa da Travesía de Vigo  7")
+        let t0 = Date(timeIntervalSince1970: 0)
+        let journey = Journey(legs: [], departure: t0, arrival: t0, transfers: 0)
+        let better = NearbyStopHint(stop: n, walkSeconds: 283, arrivesEarlierBy: 719, journey: journey)
+        #expect(PlanOutcomeMessage.nearbyStopHint(better)
+                == "Andando 5 min hasta Rúa da Travesía de Vigo  7 llegarías 11 min antes.")
+        let only = NearbyStopHint(stop: n, walkSeconds: 283, arrivesEarlierBy: nil, journey: journey)
+        #expect(PlanOutcomeMessage.nearbyStopHint(only).contains("no sale nada a tiempo"))
+    }
 }

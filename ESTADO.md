@@ -27,6 +27,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Comparación con el motor del Concello** | ✅ Todos los puntos ejecutados. Detalle en `AUDITORIA-MOTOR-VS-CONCELLO.md` |
 | **Fase 14 — Bus en marcha («ya voy montado»)** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 | **Fase 15 — «Estoy en esta parada»** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
+| **Fase 15b — La parada elegida manda de verdad** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -2548,3 +2549,59 @@ GPS pisando la parada; (7) conservar el destino anterior. Las siete tumban tests
 - [ ] Tocar una línea abre su horario con el próximo arriba y la siguiente marcada
 - [ ] «Ir a… desde esta parada» → elegir destino → alternativas que salen de esa parada
 - [ ] Buscar «7270» en el buscador y hacer lo mismo
+
+## Fase 15b — La parada elegida manda de verdad
+
+Plan en `~/.claude/plans/bien-el-caso-real-purring-whale.md`. Fase 15 no funcionaba en dispositivo.
+Caso real del propietario: en la **parada 5720 (Gregorio Espino 33)**, con destino el **Concello**, la
+app no ofrecía nada que saliera de la 5720. Mandaba andar hasta la Travesía de Vigo, aunque el 4C sale
+de la 5720 y va directo.
+
+### Causa
+
+Fase 15 solo tocó el estado de la pantalla. `JourneyPlanner.plan` usaba `query.origin.coordinate`
+para cualquier origen: una parada elegida se trataba como un punto en la acera y se buscaban todas las
+paradas a 15 min andando. En la misma ronda de RAPTOR, un bus que llega antes desde otra parada borra
+el de la parada elegida. Los tests de Fase 15 comprobaban el estado, no qué paradas usaba el motor.
+
+**Reproducido contra el feed real antes de arreglarlo** (`StopOriginRealFeedTests`, día laborable a
+las 10:00). Las cuatro alternativas empezaban con «walk 283 s → Rúa da Travesía de Vigo 7» (4C, 11,
+11, 4A). Después del arreglo: 4C directo desde la 5720 a las 10:03, más H2, 23, 31 y el 4C siguiente,
+todos desde la 5720 y sin aviso (desde la Travesía no se llega ≥ 10 min antes).
+
+### Decisiones del propietario
+
+- Opción C: si el origen es una parada, todas las alternativas salen de ella. Aparte, un aviso si
+  otra parada cercana llega **≥ 10 min antes** con la caminata incluida.
+- Con origen GPS o coordenada, nada cambia.
+
+### Hecho
+
+- [x] **`JourneyPlanner.plan`**: con origen `.stop`, el acceso es solo esa parada con 0 s. Si no tiene
+  servicio en el timetable, el acceso queda vacío; no se vuelve en silencio al radio.
+- [x] **`Planner/NearbyStopHint.swift`**: solo para origen `.stop` se hace una segunda `scan` por radio
+  y se elige el viaje que llega antes y sube en otra parada. Si nada sale de la parada elegida, hay
+  aviso sin umbral. La ganancia se redondea a segundos enteros.
+- [x] **`PlannerOptions.nearbyStopHintMinimumGain`** = 600 s. **`PlanResult.nearbyStopHint`**.
+- [x] **`MapNavigationState.visibleNearbyStopHint`**: atado a `route` igual que `estimateNotice`. Se
+  ve con alternativas y con fallo, y se limpia al planificar de nuevo o en `planningFailed`.
+- [x] **`PlanOutcomeMessage.nearbyStopHint`**: «Andando N min hasta X llegarías M min antes». La
+  caminata se redondea hacia arriba y la ganancia hacia abajo.
+- [x] **`MapRouteSheet`**: sección propia bajo las alternativas. Tocarla pone esa parada como origen
+  y vuelve a planificar.
+
+**Verificado por mutación, seis veces:** (a) parada con acceso por radio; (b) umbral `<=`; (b2) sin
+umbral; (c) la parada elegida como su propio aviso; (d) aviso visible sin mirar `route`; (e)
+`planningFailed` que conserva el aviso. Las seis tumban tests.
+
+**553 tests** en el núcleo (66 suites), verde (+12). Con `VIGO_GTFS_ZIP`, `StopOriginRealFeedTests`
+pasa. `Real feed timings` solo falla si se ejecuta en paralelo con el resto de suites del feed real
+(2,8 s). Sola da 277 ms: es una consulta con coordenada, que este cambio no toca. La app compila en
+Debug y en Release contra `generic/platform=iOS`.
+
+### Pendiente de comprobar en dispositivo
+
+- [ ] Parada 5720 → Concello: aparece el 4C directo y nada obliga a andar hasta otra parada
+- [ ] Con otra parada ≥ 10 min mejor, sale el aviso; con menos, no
+- [ ] Tocar el aviso cambia el origen a esa parada y vuelve a calcular
+- [ ] Con origen «Mi ubicación», las alternativas son como antes

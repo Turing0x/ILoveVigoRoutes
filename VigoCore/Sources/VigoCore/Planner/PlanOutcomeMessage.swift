@@ -110,6 +110,21 @@ public enum PlanOutcomeMessage {
         }
     }
 
+    /// The line under the alternatives when another stop nearby is clearly better
+    /// (`NearbyStopHint`).
+    ///
+    /// Names the stop, the walk and the gain, because those three are the whole decision: is
+    /// it worth walking that far for that much. The walk rounds up and the gain rounds down,
+    /// so the sentence never oversells the other stop.
+    public static func nearbyStopHint(_ hint: NearbyStopHint) -> String {
+        let walk = max(1, Int((Double(hint.walkSeconds) / 60).rounded(.up)))
+        guard let gain = hint.arrivesEarlierBy else {
+            return "Desde esta parada no sale nada a tiempo. Andando \(walk) min hasta \(hint.stop.name) sí."
+        }
+        let minutes = Int((gain / 60).rounded(.down))
+        return "Andando \(walk) min hasta \(hint.stop.name) llegarías \(minutes) min antes."
+    }
+
     // MARK: - Detalles
 
     private static func origin(_ context: Context) -> String {
