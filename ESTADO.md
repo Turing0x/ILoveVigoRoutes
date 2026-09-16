@@ -28,6 +28,7 @@ completo de cada fase vive en `ILoveVigoRoutes-HANDOFF.md`; esto es solo "dónde
 | **Fase 14 — Bus en marcha («ya voy montado»)** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 | **Fase 15 — «Estoy en esta parada»** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 | **Fase 15b — La parada elegida manda de verdad** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
+| **Fase 16 — Traza del trayecto en curso en el mapa** | 🟡 Hecha en código y en tests. Pendiente de comprobación en dispositivo |
 
 ---
 
@@ -2605,3 +2606,51 @@ Debug y en Release contra `generic/platform=iOS`.
 - [ ] Con otra parada ≥ 10 min mejor, sale el aviso; con menos, no
 - [ ] Tocar el aviso cambia el origen a esa parada y vuelve a calcular
 - [ ] Con origen «Mi ubicación», las alternativas son como antes
+
+## Fase 16 — Traza del trayecto en curso en el mapa
+
+Plan en `~/.claude/plans/bien-el-caso-real-purring-whale.md`. Visto por el propietario en el dispositivo:
+mientras compara alternativas, el mapa pinta el recorrido del bus, pero al pulsar «He subido a este bus»
+la traza desaparece.
+
+### Causa
+
+`MapScreen` solo pintaba `drawn`, las alternativas del planificador, y solo con la hoja «Cómo llegar»
+abierta (`isRouting`). El trayecto activo se guarda como `ActiveJourneySnapshot`, pero **nada lo
+dibujaba nunca**: solo existía la cápsula. Lo mismo pasaba con «Voy en un autobús» (Fase 14) y al
+reabrir la app.
+
+### Decisiones del propietario
+
+- Se pintan las dos cosas: el trayecto activo y el bus declarado (lo que le queda a la línea).
+- «He subido a este bus» cierra la hoja, y el mapa encuadra el trayecto.
+
+### Hecho
+
+- [x] **`MapFlow/RideTracePlan.swift`** (función pura): qué dibujar desde un `ActiveJourneySnapshot`
+  (tramos con subida, intermedias y bajada, más la caminata final si el destino no es la parada) o desde
+  un `OnboardRide` (de `currentPosition` al final del patrón; salta paradas desaparecidas y devuelve
+  `nil` si quedan menos de dos).
+- [x] **`JourneyTraceBuilder.traces(for: RideTracePlan)`**: mismo shape y mismo recorte que las
+  alternativas. Si el trip ya no existe tras reimportar, va parada a parada. **`RideTraceMapContent`**
+  con el mismo estilo que la alternativa resaltada.
+- [x] **`MapScreenModel.showInProgress`**: lee los shapes fuera del hilo principal.
+  `.task(id:)` sobre los dos stores cubre empezar, terminar, cancelar, el arranque en frío y el bus
+  que avanza de parada.
+- [x] Se pinta siempre que la hoja de rutas no está abierta. El encuadre se hace una vez por trayecto
+  (`identity`), no cada vez que se pasa una parada, y nunca siguiendo la ubicación.
+- [x] «He subido a este bus» llama a `dismissSheet` después de `activeJourney.start`.
+
+**Verificado por mutación, tres veces:** onboard desde `boardPosition`, caminata final siempre, no
+filtrar paradas desaparecidas. Las tres tumban tests.
+
+**557 tests** en el núcleo (67 suites), verde (+4). La app compila en Debug y en Release contra
+`generic/platform=iOS`.
+
+### Pendiente de comprobar en dispositivo
+
+- [ ] Planificar → «He subido a este bus» → se cierra la hoja y el mapa muestra solo ese trayecto encuadrado
+- [ ] Cerrar la app y volver: la traza sigue
+- [ ] Terminar o cancelar desde la cápsula: la traza desaparece
+- [ ] Abrir «Cómo llegar» con un trayecto en curso: se ven las alternativas y, al cerrar, vuelve el trayecto
+- [ ] «Voy en un autobús»: se pinta lo que le queda a la línea, y al pasar paradas se acorta sin mover la cámara

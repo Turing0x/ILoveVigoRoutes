@@ -139,6 +139,12 @@ struct MapScreen: View {
                                               traces: model.drawn.traces,
                                               selected: model.state.selectedAlternative)
                 }
+                // Fase 16. The journey already under way, whenever the route flow is not what
+                // is on screen. Planning something else takes the map over while that sheet is
+                // open; closing it brings the journey under way back.
+                if !isRouting(model), let inProgress = model.inProgress {
+                    RideTraceMapContent(plan: inProgress.plan, traces: inProgress.traces)
+                }
             }
             // Apple draws its own card for a selected point of interest. Ours replaces it.
             .mapFeatureSelectionAccessory(nil)
@@ -247,6 +253,19 @@ struct MapScreen: View {
             }
             .onChange(of: model.state.selectedAlternative) { _, _ in
                 frame(journeys: model.drawn.journeys, traces: model.drawn.traces)
+            }
+            // Every way a journey under way can change — started, ended, cancelled, restored on
+            // a cold start, a declared bus passing a stop — goes through these two stores.
+            .task(id: InProgressKey(journey: environment.activeJourney.journey,
+                                    ride: environment.onboardRide.ride)) {
+                await model.showInProgress(journey: environment.activeJourney.journey,
+                                           ride: environment.onboardRide.ride)
+            }
+            // Framed once per journey, not once per stop passed.
+            .onChange(of: model.inProgress?.identity) { _, identity in
+                guard identity != nil, let inProgress = model.inProgress,
+                      !isRouting(model), !model.state.isFollowing else { return }
+                move(to: JourneyTraceBuilder.region(for: inProgress.plan, traces: inProgress.traces))
             }
             .sheet(isPresented: $declaringRide) { OnboardDeclareSheet() }
             // Picking a stop hands it to the map's own card, which is the stop screen: this
@@ -357,6 +376,8 @@ struct MapScreen: View {
                 onStartActiveJourney: {
                     if let snapshot = model.startActiveJourney() {
                         environment.activeJourney.start(snapshot)
+                        // Fase 16: back to the map, which now draws this journey and frames it.
+                        dismissSheet(model)
                     }
                 },
                 onClose: { dismissSheet(model) })
@@ -589,4 +610,10 @@ struct MapScreen: View {
                                    span: MKCoordinateSpan(latitudeDelta: 0.04,
                                                           longitudeDelta: 0.04))))
     }
+}
+
+/// What `MapScreen` re-reads the journey under way on. Both halves are `Hashable` already.
+private struct InProgressKey: Hashable {
+    let journey: ActiveJourneySnapshot?
+    let ride: OnboardRide?
 }

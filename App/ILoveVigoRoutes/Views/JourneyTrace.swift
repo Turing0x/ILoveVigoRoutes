@@ -177,3 +177,83 @@ extension Coordinate {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 }
+
+// MARK: - A journey already under way (Fase 16)
+
+extension JourneyTraceBuilder {
+
+    /// The traces for a journey under way. Same shape reading and trimming as a planned
+    /// journey, so the line on the map does not change look the moment "He subido" is pressed.
+    ///
+    /// A trip that no longer resolves after a reimport falls back to the stop-to-stop path —
+    /// drawn solid because it is still the bus, but only through the stops it is known to call at.
+    static func traces(for plan: RideTracePlan, repository: TransitRepository) -> [JourneyTrace] {
+        var found: [JourneyTrace] = []
+        for (index, ride) in plan.rides.enumerated() {
+            let shape: [CLLocationCoordinate2D]? = {
+                guard let tripID = ride.tripID,
+                      let trip = try? repository.trip(id: tripID),
+                      let shapeID = trip.shapeID,
+                      let points = try? repository.shape(id: shapeID), points.count > 1
+                else { return nil }
+                return trim(points.map { CLLocationCoordinate2D(latitude: $0.latitude,
+                                                                longitude: $0.longitude) },
+                            boardCoordinate: ride.board, alightCoordinate: ride.alight)
+            }()
+            found.append(JourneyTrace(id: index, kind: .ride,
+                                      coordinates: shape ?? ride.stopPath.map(\.clLocation)))
+        }
+        if let walk = plan.egressWalk {
+            found.append(JourneyTrace(id: plan.rides.count, kind: .walk,
+                                      coordinates: [walk.from.clLocation, walk.to.clLocation]))
+        }
+        return found
+    }
+
+    static func region(for plan: RideTracePlan, traces: [JourneyTrace]) -> MKCoordinateRegion {
+        let coordinates = plan.keyCoordinates + traces.flatMap(\.coordinates).map {
+            Coordinate(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        guard let bounds = CoordinateBounds(coordinates) else {
+            return MKCoordinateRegion(center: LocationProvider.vigoCentre,
+                                      span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04))
+        }
+        let spans = bounds.paddedSpans()
+        return MKCoordinateRegion(
+            center: bounds.centre.clLocation,
+            span: MKCoordinateSpan(latitudeDelta: spans.latitude, longitudeDelta: spans.longitude))
+    }
+}
+
+/// The journey under way as map content. Drawn exactly like the highlighted alternative was —
+/// same indigo, same dashed walk, same green and red pins — because it is the same journey.
+struct RideTraceMapContent: MapContent {
+    let plan: RideTracePlan
+    let traces: [JourneyTrace]
+
+    var body: some MapContent {
+        ForEach(traces) { trace in
+            switch trace.kind {
+            case .ride:
+                MapPolyline(coordinates: trace.coordinates)
+                    .stroke(.indigo, lineWidth: 4)
+            case .walk:
+                MapPolyline(coordinates: trace.coordinates)
+                    .stroke(.indigo.opacity(0.75),
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [1, 9]))
+            }
+        }
+        ForEach(Array(plan.rides.enumerated()), id: \.offset) { _, ride in
+            Marker(ride.boardName, systemImage: "arrow.up.circle.fill",
+                   coordinate: ride.board.clLocation)
+                .tint(.green)
+            Marker(ride.alightName, systemImage: "arrow.down.circle.fill",
+                   coordinate: ride.alight.clLocation)
+                .tint(.red)
+        }
+        if let destination = plan.destination {
+            Marker("Destino", systemImage: "flag.checkered", coordinate: destination.clLocation)
+                .tint(.blue)
+        }
+    }
+}
