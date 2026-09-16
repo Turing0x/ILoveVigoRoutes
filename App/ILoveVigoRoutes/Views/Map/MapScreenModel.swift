@@ -390,6 +390,50 @@ final class MapScreenModel {
         drawn = DrawnRoute(journeys: journeys, traces: traces)
     }
 
+    // MARK: - Journey under way (Fase 16)
+
+    /// What is already being ridden, as the map draws it.
+    struct InProgressTrace {
+        let plan: RideTracePlan
+        let traces: [JourneyTrace]
+        /// Changes when a *different* journey appears, not when the same one advances a stop.
+        /// The camera frames on this, so a declared bus shrinking its line does not keep
+        /// yanking the map away from whoever is looking round it.
+        let identity: String
+    }
+
+    /// Whatever is under way, drawn whenever the route flow is not on screen. Held here and
+    /// not derived in `body` for the same reason as `drawn`: reading shapes is SQLite.
+    private(set) var inProgress: InProgressTrace?
+
+    /// Rebuilds `inProgress` from what the stores hold. A declared bus wins over an active
+    /// journey, the same order as the capsule in `RootView` — the two never coexist anyway.
+    func showInProgress(journey: ActiveJourneySnapshot?, ride: OnboardRide?) async {
+        guard journey != nil || ride != nil else {
+            inProgress = nil
+            return
+        }
+        let repository = self.repository
+        inProgress = await Task.detached(priority: .userInitiated) { () -> InProgressTrace? in
+            let plan: RideTracePlan?
+            let identity: String
+            if let ride {
+                plan = RideTracePlan(ride, stops: { try? repository.stop(id: $0) })
+                identity = "ride:\(ride.declaredAt.timeIntervalSince1970)"
+            } else if let journey {
+                plan = RideTracePlan(journey)
+                identity = "journey:\(journey.scheduledDeparture.timeIntervalSince1970):"
+                    + (journey.rides.first?.tripID?.rawValue ?? "")
+            } else {
+                return nil
+            }
+            guard let plan, !plan.rides.isEmpty else { return nil }
+            return InProgressTrace(plan: plan,
+                                   traces: JourneyTraceBuilder.traces(for: plan, repository: repository),
+                                   identity: identity)
+        }.value
+    }
+
     /// Builds a snapshot of the currently highlighted alternative, ready for
     /// `ActiveJourneyStore.start(_:)`.
     ///
