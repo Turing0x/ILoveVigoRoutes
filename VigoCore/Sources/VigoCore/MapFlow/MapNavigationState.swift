@@ -313,10 +313,28 @@ public struct MapNavigationState: Sendable {
         return PlanOutcomeMessage.estimateNotice(schedule)
     }
 
+    /// "From that stop round the corner you would arrive much sooner", from the last search.
+    public private(set) var nearbyStopHint: NearbyStopHint?
+
+    /// The hint, only while the answer it belongs to is on screen.
+    ///
+    /// Gated on `route` for the same reason `estimateNotice` is: every transition that drops
+    /// the answer back to `.idle` then drops the hint with it, without each having to
+    /// remember. A failed search is included — "nothing leaves from this stop in time, but
+    /// something does from over there" is exactly when the hint matters most.
+    public var visibleNearbyStopHint: NearbyStopHint? {
+        switch route {
+        case .alternatives, .failed: return nearbyStopHint
+        default: return nil
+        }
+    }
+
     /// Folds a `PlanOutcome` into the three shapes the UI draws.
     public mutating func planningFinished(_ outcome: PlanOutcome,
-                                          schedule: ServiceDaySource = .observed) {
+                                          schedule: ServiceDaySource = .observed,
+                                          nearbyStopHint: NearbyStopHint? = nil) {
         self.schedule = schedule
+        self.nearbyStopHint = nearbyStopHint
         switch outcome {
         case .journeys(let journeys):
             // An empty list is not a success with nothing in it; it is the same "found
@@ -337,6 +355,7 @@ public struct MapNavigationState: Sendable {
     public mutating func planningFailed() {
         route = .idle
         schedule = .observed
+        nearbyStopHint = nil
     }
 
     // MARK: - Alternatives

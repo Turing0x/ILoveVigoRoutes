@@ -232,6 +232,15 @@ public struct PlannerOptions: Sendable, Hashable {
     /// produced in practice, not a second radius of its own.
     public var maxNearbyStops: Int
 
+    /// How much sooner another nearby stop must get the traveller there before a search from a
+    /// chosen stop mentions it (`NearbyStopHint`).
+    ///
+    /// A stop picked as origin is the owner's decision, not a suggestion: the alternatives all
+    /// leave from it. This is only the threshold for saying "from over there you would arrive
+    /// this much earlier". Ten minutes, the owner's own figure: below that the aside is noise
+    /// next to a bus that is already at the stop.
+    public var nearbyStopHintMinimumGain: TimeInterval
+
     public init(
         walkSpeedMetresPerSecond: Double = 1.33,
         accessibility: AccessibilityProfile = .standard,
@@ -251,7 +260,8 @@ public struct PlannerOptions: Sendable, Hashable {
         extraTransferWorthSeconds: Int = 300,
         maxNearbyStops: Int = 100,
         maxProjectionDays: Int = 60,
-        alternativeSlackSeconds: TimeInterval = 900
+        alternativeSlackSeconds: TimeInterval = 900,
+        nearbyStopHintMinimumGain: TimeInterval = 600
     ) {
         self.walkSpeedMetresPerSecond = walkSpeedMetresPerSecond
         self.accessibility = accessibility
@@ -272,5 +282,6 @@ public struct PlannerOptions: Sendable, Hashable {
         self.maxNearbyStops = maxNearbyStops
         self.maxProjectionDays = maxProjectionDays
         self.alternativeSlackSeconds = alternativeSlackSeconds
+        self.nearbyStopHintMinimumGain = nearbyStopHintMinimumGain
     }
 }

@@ -74,6 +74,24 @@ struct MapRouteSheet: View {
 
                 results
 
+                // Fase 15b. Its own section, apart from the alternatives, because it is not
+                // one of them: every alternative leaves from the stop the user chose, and this
+                // only says a stop nearby would be clearly better. Tapping it makes that stop
+                // the origin, which plans again from there.
+                if let hint = state.visibleNearbyStopHint {
+                    Section {
+                        Button {
+                            onPick(.origin, .stop(hint.stop))
+                        } label: {
+                            Label(PlanOutcomeMessage.nearbyStopHint(hint),
+                                  systemImage: "figure.walk.motion")
+                                .font(.subheadline)
+                        }
+                    } footer: {
+                        Text("Toca para salir desde esa parada.")
+                    }
+                }
+
                 // Last, not first: the point of this sheet is the answer above it, and a
                 // journey is worth saving once you have seen that it is the right one.
                 if let origin = state.origin, let destination = state.destination {
